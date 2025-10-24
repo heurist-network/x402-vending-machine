@@ -6,26 +6,22 @@ import {AccessControl} from "openzeppelin-contracts/access/AccessControl.sol";
 import {EIP712} from "openzeppelin-contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "openzeppelin-contracts/utils/cryptography/ECDSA.sol";
 
-/// @notice ERC-7572: contract-level metadata via contractURI()
-interface IERC7572 {
-    function contractURI() external view returns (string memory);
-}
+interface IERC7572 { function contractURI() external view returns (string memory); }
 
-/**
- * @title X402Token
- * @dev ERC20 with hard cap + MINTER_ROLE, ERC-3009 (transfer with authorization),
- *      and ERC-7572 (contractURI + setter restricted to creator).
- */
 contract X402Token is ERC20, EIP712, AccessControl, IERC7572 {
-    // --- Roles
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    bytes32 public constant BURNER_ROLE = keccak256("BURNER_ROLE");
     bytes32 public constant CONTRACT_URI_SETTER_ROLE = keccak256("CONTRACT_URI_SETTER_ROLE");
 
-    // --- Cap
     uint256 public immutable MAX_SUPPLY;
+    string  private _contractURI;
+    bool    public transfersEnabled;  // locked until graduation
 
-    // --- ERC-7572
-    string private _contractURI;
+    // --- errors
+    error NotMinter();
+    error NotBurner();
+    error CapExceeded();
+    error TransfersDisabled();
 
     // --- ERC-3009 typehashes
     bytes32 public constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH =
@@ -56,14 +52,17 @@ contract X402Token is ERC20, EIP712, AccessControl, IERC7572 {
         uint256 maxSupply_,
         address admin,
         address minter,
-        address creator,          // will control contractURI
-        string memory initialURI  // optional; empty allowed
+        address burner,
+        address creator,
+        string memory initialURI
     ) ERC20(name_, symbol_) EIP712(name_, "1") {
         MAX_SUPPLY = maxSupply_;
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(MINTER_ROLE, minter);
+        _grantRole(BURNER_ROLE, burner);
         _grantRole(CONTRACT_URI_SETTER_ROLE, creator);
         _contractURI = initialURI;
+        transfersEnabled = false;
     }
 
     // --- ERC-7572
@@ -77,11 +76,29 @@ contract X402Token is ERC20, EIP712, AccessControl, IERC7572 {
         emit ContractURIUpdated(newURI);
     }
 
+    function _update(address from, address to, uint256 value) internal override {
+        // allow mint/burn always; block regular transfers until enabled
+        if (from != address(0) && to != address(0) && !transfersEnabled) {
+            revert TransfersDisabled();
+        }
+        super._update(from, to, value);
+    }
+
+    // --- enable transfers at graduation (only admin = VendingMachine)
+    function enableTransfers() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        transfersEnabled = true;
+    }
+
     // --- Mint with cap
     function mint(address to, uint256 amount) external {
         if (!hasRole(MINTER_ROLE, msg.sender)) revert NotMinter();
         if (totalSupply() + amount > MAX_SUPPLY) revert CapExceeded();
         _mint(to, amount);
+    }
+
+    function burn(address from, uint256 amount) external {
+        if (!hasRole(BURNER_ROLE, msg.sender)) revert NotBurner();
+        _burn(from, amount);
     }
 
     // --- ERC3009 helpers

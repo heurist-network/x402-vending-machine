@@ -110,6 +110,7 @@ contract VendingMachine is AccessControl {
             1_000_000_000e18,  // 1B max
             address(this),     // admin
             address(this),     // minter
+            address(this),     // burner
             creator,           // ERC-7572 setter
             initialContractURI
         ));
@@ -153,6 +154,8 @@ contract VendingMachine is AccessControl {
         L.allocated                += tokens;
         usdcAccountedTotal         += usdcAmount;
 
+        X402Token(L.token).mint(buyer, tokens);
+
         emit PurchaseRecorded(id, buyer, usdcAmount, tokens);
     }
 
@@ -183,6 +186,7 @@ contract VendingMachine is AccessControl {
             address b = buyers[i];
             contributions6d[id][b] += usdcAmount;
             allocations[id][b]     += tokensPerBuyer;
+            X402Token(L.token).mint(b, tokensPerBuyer);
             emit PurchaseRecorded(id, b, usdcAmount, tokensPerBuyer);
         }
     }
@@ -193,10 +197,8 @@ contract VendingMachine is AccessControl {
         if (L.graduated) revert AlreadyGraduated();
         if (L.allocated != L.fairCap) revert NotGraduatable();
 
-        // Swap this launch's USDC only from the pooled vault
         uint256 usdcIn = L.usdcAccounted;
-        if (usdcIn == 0) revert VaultInsufficient();
-        if (USDC.balanceOf(vault) < usdcIn) revert VaultInsufficient();
+        if (usdcIn == 0 || USDC.balanceOf(vault) < usdcIn) revert VaultInsufficient();
 
         TreasuryVault(vault).swapUSDCforHEU(
             V3_ROUTER, USDC, HEU, L.v3Fee, usdcIn, minHeuOut
@@ -214,19 +216,9 @@ contract VendingMachine is AccessControl {
             minTokenForLP, minHeuForLP
         );
 
+        X402Token(L.token).enableTransfers();
         L.graduated = true;
         emit Graduated(id, usdcIn, heuBal, 0);
-    }
-
-    // --- Claim after graduation
-    function claim(uint256 id) external {
-        Launch storage L = _get(id);
-        if (!L.graduated) revert SalesClosed();
-        uint256 amt = allocations[id][msg.sender];
-        if (amt == 0) revert Zero();
-        allocations[id][msg.sender] = 0;
-        X402Token(L.token).mint(msg.sender, amt);
-        emit Claimed(id, msg.sender, amt);
     }
 
     // --- Refund window predicate (by token address)
@@ -256,15 +248,21 @@ contract VendingMachine is AccessControl {
         usdcAccountedTotal  -= amt;
         L.allocated         -= alloc;
 
-        // Pull from the single vault to the buyer
+        // burn already-minted tokens (only pre-graduation allowed)
+        X402Token(L.token).burn(buyer, alloc);
+
+        // pay back USDC
         TreasuryVault(vault).pull(USDC, buyer, amt);
 
         emit Refunded(id, buyer, amt);
     }
 
-    // --- Emergency: admin sweep ALL USDC from the single vault
-    function emergencyWithdrawUSDC(address to) external {
-        if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) revert OnlyAdmin();
+    function adminRefund(address to, uint256 usdcAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        // does NOT touch any launch accounting. intended for off-chain tracked anomalies
+        TreasuryVault(vault).pull(USDC, to, usdcAmount);
+    }
+
+    function emergencyWithdrawUSDC(address to) external onlyRole(DEFAULT_ADMIN_ROLE) {
         uint256 bal = USDC.balanceOf(vault);
         TreasuryVault(vault).pull(USDC, to, bal);
         emit EmergencyWithdrawn(bal, to);
