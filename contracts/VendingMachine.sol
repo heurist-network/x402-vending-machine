@@ -69,6 +69,8 @@ contract VendingMachine is AccessControl {
     // --- Global accounting for solvency checks against pooled vault
     uint256 public usdcAccountedTotal;  // sum over launches (6d)
 
+    address[] private _operators;
+
     // --- Events
     event Coined(uint256 indexed id, address token, Size size, address creator, uint24 v3Fee, string contractURI);
     event PurchaseRecorded(uint256 indexed id, address buyer, uint256 usdcAmount, uint256 tokensAllocated);
@@ -76,20 +78,69 @@ contract VendingMachine is AccessControl {
     event Claimed(uint256 indexed id, address buyer, uint256 tokens);
     event Refunded(uint256 indexed id, address buyer, uint256 usdcAmount);
     event EmergencyWithdrawn(uint256 usdcAmount, address to);
+    event OperatorAdded(address indexed operator);
+    event OperatorRemoved(address indexed operator);
 
-    constructor(address admin, address initialOperator) {
+    constructor(address admin, address[] memory initialOperators) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        if (initialOperator != address(0)) _grantRole(OPERATOR_ROLE, initialOperator);
+
+        for (uint256 i = 0; i < initialOperators.length; i++) {
+            address op = initialOperators[i];
+            if (op != address(0) && !hasRole(OPERATOR_ROLE, op)) {
+                _grantRole(OPERATOR_ROLE, op);
+                _operators.push(op);
+                emit OperatorAdded(op);
+            }
+        }
 
         // deploy the shared vault; set owner = this vending machine
         address v = address(new TreasuryVault(address(this)));
         vault = v;
     }
 
-    // --- Helpers
     modifier onlyOp(){ if (!hasRole(OPERATOR_ROLE, msg.sender)) revert NotOperator(); _; }
     function _get(uint256 id) internal view returns (Launch storage L) {
         L = launches[id]; if (L.token == address(0)) revert LaunchNotFound();
+    }
+
+    function addOperators(address[] calldata operators) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        for (uint256 i = 0; i < operators.length; i++) {
+            address op = operators[i];
+            if (op != address(0) && !hasRole(OPERATOR_ROLE, op)) {
+                _grantRole(OPERATOR_ROLE, op);
+                _operators.push(op);
+                emit OperatorAdded(op);
+            }
+        }
+    }
+
+    function removeOperators(address[] calldata operators) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        for (uint256 i = 0; i < operators.length; i++) {
+            address op = operators[i];
+            if (hasRole(OPERATOR_ROLE, op)) {
+                _revokeRole(OPERATOR_ROLE, op);
+                _removeFromOperatorArray(op);
+                emit OperatorRemoved(op);
+            }
+        }
+    }
+
+    function _removeFromOperatorArray(address op) private {
+        for (uint256 i = 0; i < _operators.length; i++) {
+            if (_operators[i] == op) {
+                _operators[i] = _operators[_operators.length - 1];
+                _operators.pop();
+                break;
+            }
+        }
+    }
+
+    function getOperators() external view returns (address[] memory) {
+        return _operators;
+    }
+
+    function isOperator(address account) external view returns (bool) {
+        return hasRole(OPERATOR_ROLE, account);
     }
 
     // --- Factory: coin (deploy token, no per-launch vault)
