@@ -10,7 +10,7 @@ const WORKER_ID = `vm-worker-${process.pid}`;
 const web3 = await initContracts();
 
 async function handleCOIN(job: any) {
-  const { name, symbol, initialURI, creator, size } = job.payload;
+  const { launchId, name, symbol, initialURI, creator, size } = job.payload;
   const vm = pickOperator(web3.vm, web3.operators);
   const tx = await vm.coin(name, symbol, initialURI, creator, size === 'TEST' ? 0 : size === 'S' ? 1 : 2);
   const rcpt = await tx.wait();
@@ -29,38 +29,33 @@ async function handleCOIN(job: any) {
   const finalKey = tokenMetadataKey(token);
   const finalUri = await uploadMetadataJson(finalKey, metadata);
 
-  await prisma.launch.create({
+  await prisma.launch.update({
+    where: { id: launchId },
     data: {
+      status: "active",
       tokenLower: token,
       onchainId: BigInt(onchainId),
-      name,
-      symbol,
-      size,
-      creator,
+      txHash: tx.hash,
       contractUri: finalUri,
-      createdAt: new Date(L.createdAt * 1000),
       graduated: L.graduated,
-      allocatedTokens: L.allocated.toString(),
       targetUsdc6d: L.targetUSDC,
       usdcAccounted6d: L.usdcAccounted
     }
   });
 
-  await prisma.coinRequest.update({
-    where: { id: job.id.toString() },
-    data: {
-      status: "done",
-      onchainId: BigInt(onchainId),
-      tokenLower: token,
-      txHash: tx.hash
-    }
-  });
-
-  log.info({ onchainId, token }, "COIN done");
+  log.info({ onchainId, token, launchId }, "COIN done");
 }
 
 async function handlePURCHASE(job: any) {
-  const { tokenLower, payer, usdcAmount6d, x402Nonce } = job.payload;
+  const { purchaseId, tokenLower, recipient, usdcAmount6d } = job.payload;
+  const usdcAmountBigInt = BigInt(usdcAmount6d);
+
+  const purchase = await prisma.purchase.findUnique({
+    where: { id: purchaseId },
+    select: { payer: true }
+  });
+  if (!purchase) throw new Error("purchase_not_found");
+
   const launch = await prisma.launch.findUnique({
     where: { tokenLower },
     select: { onchainId: true }
@@ -71,40 +66,50 @@ async function handlePURCHASE(job: any) {
   const L = await readLaunch(web3.vm, onchainId);
 
   if (L.graduated) {
-    log.warn({ tokenLower, payer, x402Nonce }, "Purchase failed: launch already graduated, enqueueing refund");
-    await prisma.purchase.updateMany({
-      where: { tokenLower, x402Nonce },
+    log.warn({ tokenLower, recipient, purchaseId }, "Purchase failed: launch already graduated, enqueueing refund");
+    await prisma.purchase.update({
+      where: { id: purchaseId },
       data: { status: "to_refund" }
     });
-    await enqueueJob("REFUND", `refund:${tokenLower}:${payer}`, { tokenLower, buyer: payer }, undefined, 3);
+    await enqueueJob("REFUND", `refund:${purchaseId}`, {
+      purchaseId,
+      tokenLower,
+      payer: purchase.payer,
+      usdcAmount6d: usdcAmount6d.toString()
+    }, undefined, 3);
     return;
   }
 
   const FAIR_CAP = 900_000_000n * 10n ** 18n;
   const remainingAllocation = FAIR_CAP - L.allocated;
-  const usdcAmountBigInt = BigInt(usdcAmount6d);
   const TOKENS_PER_USDC_6D = L.size === 0 ? 200_000_000n * 10n ** 12n : L.size === 1 ? 200_000n * 10n ** 12n : 20_000n * 10n ** 12n;
   const tokensRequested = usdcAmountBigInt * TOKENS_PER_USDC_6D;
 
   if (tokensRequested > remainingAllocation) {
-    log.warn({ tokenLower, payer, x402Nonce, remainingAllocation: remainingAllocation.toString() }, "Purchase failed: insufficient allocation, enqueueing refund");
-    await prisma.purchase.updateMany({
-      where: { tokenLower, x402Nonce },
+    log.warn({ tokenLower, recipient, purchaseId, remainingAllocation: remainingAllocation.toString() }, "Purchase failed: insufficient allocation, enqueueing refund");
+    await prisma.purchase.update({
+      where: { id: purchaseId },
       data: { status: "to_refund" }
     });
-    await enqueueJob("REFUND", `refund:${tokenLower}:${payer}`, { tokenLower, buyer: payer }, undefined, 3);
+    await enqueueJob("REFUND", `refund:${purchaseId}`, {
+      purchaseId,
+      tokenLower,
+      payer: purchase.payer,
+      usdcAmount6d: usdcAmount6d.toString()
+    }, undefined, 3);
     return;
   }
 
   const vm = pickOperator(web3.vm, web3.operators);
-  const tx = await vm.handlePurchase(onchainId, payer, usdcAmount6d);
+  const tx = await vm.handlePurchase(onchainId, recipient, usdcAmount6d);
   await tx.wait();
 
-  await prisma.purchase.updateMany({
-    where: { tokenLower, x402Nonce },
+  await prisma.purchase.update({
+    where: { id: purchaseId },
     data: {
       status: "handled",
-      operator: vm.runner?.address ?? "operator"
+      operator: vm.runner?.address ?? "operator",
+      txHash: tx.hash
     }
   });
 
@@ -112,7 +117,6 @@ async function handlePURCHASE(job: any) {
   await prisma.launch.update({
     where: { tokenLower },
     data: {
-      allocatedTokens: updatedL.allocated.toString(),
       usdcAccounted6d: updatedL.usdcAccounted,
       graduated: updatedL.graduated
     }
@@ -144,7 +148,7 @@ async function handleGRADUATE(job: any) {
 }
 
 async function handleREFUND(job: any) {
-  const { tokenLower, buyer } = job.payload;
+  const { purchaseId, tokenLower, payer, usdcAmount6d } = job.payload;
   const launch = await prisma.launch.findUnique({
     where: { tokenLower },
     select: { onchainId: true }
@@ -153,12 +157,12 @@ async function handleREFUND(job: any) {
   const onchainId = Number(launch.onchainId);
 
   const vm = pickOperator(web3.vm, web3.operators);
-  const tx = await vm.refund(onchainId, buyer);
+  const tx = await vm.refund(onchainId, payer);
   await tx.wait();
 
-  await prisma.purchase.updateMany({
-    where: { tokenLower, payer: buyer },
-    data: { status: "refunded" }
+  await prisma.purchase.update({
+    where: { id: purchaseId },
+    data: { status: "refunded", txHash: tx.hash }
   });
 }
 
@@ -173,6 +177,15 @@ async function loop() {
     await finishJob(job.id, true);
   } catch (e) {
     console.error(e);
+    if (job.kind === "COIN") {
+      const { launchId } = job.payload as any;
+      if (launchId) {
+        await prisma.launch.update({
+          where: { id: launchId },
+          data: { status: "failed", error: String(e) }
+        }).catch(() => {});
+      }
+    }
     await finishJob(job.id, false, e);
   }
 }

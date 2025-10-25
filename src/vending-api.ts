@@ -29,7 +29,7 @@ app.use(paymentMiddleware(
       price: "$1.00",
       network: NETWORK,
       config: {
-        description: "Buy 1 USDC worth of tokens from the vending machine.",
+        description: "Buy 1 USDC worth of tokens from the vending machine. The token launch must be open to buy, and the allocation cap must not have been reached.",
         inputSchema: {
           type: "object",
           required: ["token"],
@@ -53,7 +53,7 @@ app.use(paymentMiddleware(
       price: "$10.00",
       network: NETWORK,
       config: {
-        description: "Buy 10 USDC worth of tokens from the vending machine.",
+        description: "Buy 10 USDC worth of tokens from the vending machine. The token launch must be open to buy, and the allocation cap must not have been reached.",
         inputSchema: {
           type: "object",
           required: ["token"],
@@ -134,8 +134,7 @@ app.use(paymentMiddleware(
               description: "Filter launches: 'open' (not graduated, created within 14 days), 'graduated', 'refundable' (not graduated, older than 14 days). Omit to return all launches."
             }
           }
-        },
-        outputSchema: { type: "array" }
+        }
       }
     },
 
@@ -143,7 +142,7 @@ app.use(paymentMiddleware(
       price: "$0.001",
       network: NETWORK,
       config: {
-        description: "Get detailed information about a specific token launch, including purchase statistics.",
+        description: "Get detailed information about a specific token, including launch status and purchase statistics, and token metadata.",
         inputSchema: {
           type: "object",
           required: ["token"],
@@ -151,6 +150,44 @@ app.use(paymentMiddleware(
             token: {
               type: "string",
               description: "The token contract address (e.g., 0x...)"
+            }
+          }
+        },
+        outputSchema: { type: "object" }
+      }
+    },
+
+    "POST /buy_status": {
+      price: "$0.01",
+      network: NETWORK,
+      config: {
+        description: "Check the status of a purchase transaction.",
+        inputSchema: {
+          type: "object",
+          required: ["reference"],
+          properties: {
+            reference: {
+              type: "string",
+              description: "The reference ID returned from the buy endpoint"
+            }
+          }
+        },
+        outputSchema: { type: "object" }
+      }
+    },
+
+    "POST /coin_status": {
+      price: "$0.01",
+      network: NETWORK,
+      config: {
+        description: "Check the status of a coin creation. Returns the token contract address if it has been created.",
+        inputSchema: {
+          type: "object",
+          required: ["reference"],
+          properties: {
+            reference: {
+              type: "string",
+              description: "The reference ID returned from the coin endpoint"
             }
           }
         },
@@ -171,18 +208,6 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
     });
     if (!launch || !launch.onchainId) return res.status(404).json({ error: "unknown_token" });
 
-    if (launch.graduated) {
-      return res.status(400).json({ error: "launch_already_graduated" });
-    }
-
-    const remainingUSDC = (launch.targetUsdc6d || 0n) - (launch.usdcAccounted6d || 0n);
-    if (remainingUSDC < expectedUsdcAmount) {
-      return res.status(400).json({
-        error: "insufficient_allocation",
-        remaining_usdc: formatUnits(remainingUSDC, 6)
-      });
-    }
-
     const xp = req.get("x-payment");
     if (!xp) return res.status(400).json({ error: "missing_x_payment_header" });
     const { payer, value, nonce } = parseXPayment(xp);
@@ -196,27 +221,49 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
       });
     }
 
-    await prisma.purchase.create({
+    const actualRecipient = recipient || payer;
+    const remainingUSDC = (launch.targetUsdc6d || 0n) - (launch.usdcAccounted6d || 0n);
+    const needsRefund = launch.graduated || remainingUSDC < expectedUsdcAmount;
+
+    const purchase = await prisma.purchase.create({
       data: {
         tokenLower,
         onchainId: launch.onchainId,
-        payer: recipient || payer,
+        payer,
+        recipient: actualRecipient,
         usdcAmount6d: value,
         x402Nonce: nonce!,
-        status: "queued"
+        status: needsRefund ? "to_refund" : "queued"
       }
-    }).catch(() => {});
+    });
 
-    const job = await enqueueJob("PURCHASE", `purchase:${nonce}`, {
+    if (needsRefund) {
+      await enqueueJob("REFUND", `refund:${nonce}`, {
+        purchaseId: purchase.id,
+        tokenLower,
+        payer,
+        usdcAmount6d: value.toString()
+      }, undefined, 3);
+
+      return res.json({
+        ok: true,
+        reference: purchase.id,
+        message: launch.graduated
+          ? "Launch already graduated. Your payment will be refunded."
+          : "Insufficient allocation remaining. Your payment will be refunded."
+      });
+    }
+
+    await enqueueJob("PURCHASE", `purchase:${nonce}`, {
+      purchaseId: purchase.id,
       tokenLower,
-      payer: recipient || payer,
-      usdcAmount6d: value.toString(),
-      x402Nonce: nonce
+      recipient: actualRecipient,
+      usdcAmount6d: value.toString()
     }, undefined, 3);
 
     return res.json({
       ok: true,
-      reference: String(job.id),
+      reference: purchase.id,
       message: "Payment received. Your tokens will be transferred to you shortly."
     });
   } catch (e) {
@@ -239,12 +286,13 @@ app.post("/coin", async (req, res) => {
     return res.status(400).json({ error: "bad_request" });
   }
 
+  const xp = req.get("x-payment");
+  if (!xp) return res.status(400).json({ error: "missing_x_payment_header" });
+  const { payer, nonce } = parseXPayment(xp);
+  if (!payer || !nonce) return res.status(400).json({ error: "bad_payment_payload" });
+
   let creator = req.body?.creator;
   if (!creator) {
-    const xp = req.get("x-payment");
-    if (!xp) return res.status(400).json({ error: "missing_x_payment_header" });
-    const { payer } = parseXPayment(xp);
-    if (!payer) return res.status(400).json({ error: "bad_payment_payload" });
     creator = payer;
   }
 
@@ -266,23 +314,28 @@ app.post("/coin", async (req, res) => {
   };
   const metadataUri = await uploadMetadataJson(tempKey, metadataPayload);
 
-  const job = await enqueueJob("COIN", undefined, {
-    name, symbol, size, creator, initialURI: metadataUri
-  }, undefined, 10);
-
-  await prisma.coinRequest.create({
+  const launch = await prisma.launch.create({
     data: {
-      id: job.id.toString(),
       name,
       symbol,
       size,
       creator,
+      x402Nonce: nonce,
       metadataUri,
       status: "queued"
     }
   });
 
-  res.json({ ok: true, reference: String(job.id), metadataUri });
+  await enqueueJob("COIN", `coin:${nonce}`, {
+    launchId: launch.id,
+    name,
+    symbol,
+    size,
+    creator,
+    initialURI: metadataUri
+  }, undefined, 10);
+
+  res.json({ ok: true, reference: launch.id, metadataUri });
 });
 
 app.post("/metadata/update", async (req, res) => {
@@ -363,26 +416,27 @@ app.post("/launches", async (req, res) => {
       contractUri: true,
       graduated: true,
       createdAt: true,
-      allocatedTokens: true,
       usdcAccounted6d: true,
       targetUsdc6d: true
     }
   });
 
-  res.json(launches.map(l => ({
-    token: l.tokenLower,
-    onchainId: l.onchainId,
-    name: l.name,
-    symbol: l.symbol,
-    size: l.size,
-    creator: l.creator,
-    contractUri: l.contractUri,
-    graduated: l.graduated,
-    createdAt: l.createdAt,
-    allocated_tokens: formatUnits(l.allocatedTokens.toString(), 18),
-    usdc_accounted: formatUnits(l.usdcAccounted6d, 6),
-    target_usdc: formatUnits(l.targetUsdc6d, 6)
-  })));
+  res.json({
+    data: launches.map(l => ({
+      token: l.tokenLower,
+      onchainId: l.onchainId,
+      name: l.name,
+      symbol: l.symbol,
+      size: l.size,
+      creator: l.creator,
+      contractUri: l.contractUri,
+      graduated: l.graduated,
+      createdAt: l.createdAt,
+      usdc_accounted: formatUnits(l.usdcAccounted6d, 6),
+      target_usdc: formatUnits(l.targetUsdc6d, 6)
+    })),
+    notes: "The data is cached and might not be up-to-date. Call the token_info API to get fresh information for a specific token."
+  });
 });
 
 app.post("/token_info", async (req, res) => {
@@ -464,6 +518,88 @@ app.post("/token_info", async (req, res) => {
     });
   } catch (e) {
     return res.status(400).json({ error: "bad_token" });
+  }
+});
+
+app.post("/buy_status", async (req, res) => {
+  try {
+    const reference = String(req.body?.reference || "");
+    if (!reference) return res.status(400).json({ error: "missing_reference" });
+
+    const purchase = await prisma.purchase.findUnique({
+      where: { id: reference },
+      select: {
+        status: true,
+        txHash: true,
+        tokenLower: true,
+        payer: true,
+        recipient: true,
+        usdcAmount6d: true,
+        createdAt: true
+      }
+    });
+
+    if (!purchase) {
+      return res.status(404).json({ error: "purchase_not_found" });
+    }
+
+    res.json({
+      reference,
+      status: purchase.status,
+      token: purchase.tokenLower,
+      payer: purchase.payer,
+      recipient: purchase.recipient,
+      usdc_amount: formatUnits(purchase.usdcAmount6d, 6),
+      tx_hash: purchase.txHash,
+      created_at: purchase.createdAt
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+app.post("/coin_status", async (req, res) => {
+  try {
+    const reference = String(req.body?.reference || "");
+    if (!reference) return res.status(400).json({ error: "missing_reference" });
+
+    const launch = await prisma.launch.findUnique({
+      where: { id: reference },
+      select: {
+        status: true,
+        name: true,
+        symbol: true,
+        size: true,
+        creator: true,
+        tokenLower: true,
+        onchainId: true,
+        txHash: true,
+        error: true,
+        createdAt: true
+      }
+    });
+
+    if (!launch) {
+      return res.status(404).json({ error: "launch_not_found" });
+    }
+
+    res.json({
+      reference,
+      status: launch.status,
+      name: launch.name,
+      symbol: launch.symbol,
+      size: launch.size,
+      creator: launch.creator,
+      token: launch.tokenLower,
+      onchain_id: launch.onchainId,
+      tx_hash: launch.txHash,
+      error: launch.error,
+      created_at: launch.createdAt
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "server_error" });
   }
 });
 

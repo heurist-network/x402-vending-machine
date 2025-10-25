@@ -8,19 +8,23 @@ datasource db {
 }
 
 model Launch {
-  tokenLower       String     @id @map("token_lower")
-  onchainId        BigInt?    @unique @map("onchain_id")
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name             String
   symbol           String
   size             String
   creator          String
-  contractUri      String     @map("contract_uri")
-  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz
-  graduated        Boolean    @default(false)
-  allocatedTokens  Decimal?   @map("allocated_tokens")
-  targetUsdc6d     BigInt?    @map("target_usdc_6d")
-  usdcAccounted6d  BigInt?    @map("usdc_accounted_6d")
-  purchases        Purchase[]
+  x402Nonce        String    @unique @map("x402_nonce")
+  status           String    @default("queued")
+  error            String?
+  metadataUri      String?   @map("metadata_uri")
+  tokenLower       String?   @unique @map("token_lower")
+  onchainId        BigInt?   @unique @map("onchain_id")
+  txHash           String?   @map("tx_hash")
+  contractUri      String?   @map("contract_uri")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  graduated        Boolean   @default(false)
+  targetUsdc6d     BigInt?   @map("target_usdc_6d")
+  usdcAccounted6d  BigInt?   @map("usdc_accounted_6d")
 
   @@map("launches")
 }
@@ -30,32 +34,15 @@ model Purchase {
   tokenLower    String   @map("token_lower")
   onchainId     BigInt   @map("onchain_id")
   payer         String
+  recipient     String
   usdcAmount6d  BigInt   @map("usdc_amount_6d")
   x402Nonce     String   @unique @map("x402_nonce")
-  settleTx      String?  @map("settle_tx")
+  txHash        String?  @map("tx_hash")
   status        String   @default("queued")
   operator      String?
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
-  launch        Launch   @relation(fields: [tokenLower], references: [tokenLower])
 
   @@map("purchases")
-}
-
-model CoinRequest {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name        String
-  symbol      String
-  size        String
-  creator     String
-  metadataUri String?  @map("metadata_uri")
-  tokenLower  String?  @map("token_lower")
-  onchainId   BigInt?  @map("onchain_id")
-  txHash      String?  @map("tx_hash")
-  status      String   @default("queued")
-  error       String?
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
-
-  @@map("coin_requests")
 }
 
 model Job {

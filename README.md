@@ -73,14 +73,14 @@ The event processor subscribes to every verified purchase events, calls smart co
 
 2. Sell
 
-- Buyers use x402 to pay USDC and get a fixed amount of tokens per USDC spent.
+- Buyers use x402 to pay USDC and get a fixed amount of tokens per USDC spent asynchronously. The tokens are not transferable at this stage.
 
 3. Graduate
 
-- When 900 M tokens sold, anyone can call `graduate()`.
-- Vault swaps USDC → HEU, adds LP, enables transfers. Token is now freely tradable.
+- When 900 M tokens sold, the operator can call `graduate()`.
+- Vault swaps the accumulated USDC → HEU, adds LP, enables transfers. Token is now freely tradable.
 
 4. Refund
 
 - If not graduated in 14 days, operators refund users one by one.
-- Refund burns tokens and returns USDC.
+- Refund burns tokens from user wallets and returns USDC.
