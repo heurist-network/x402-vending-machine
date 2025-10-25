@@ -3,11 +3,12 @@ import express from "express";
 import cors from "cors";
 import pino from "pino";
 import { paymentMiddleware } from "x402-express";
+import { formatUnits } from "ethers";
 import { prisma } from "./db";
 import { enqueueJob } from "./queue";
 import { tokenMetadataKey, uploadMetadataJson } from "./r2";
 import { parseXPayment, toLowerAddr } from "./xpay";
-import { verifyUpdateSignature } from "./auth";
+import { initContracts, readLaunch } from "./web3";
 
 const log = pino({ level: process.env.LOG_LEVEL || "info" });
 const app = express();
@@ -20,6 +21,8 @@ const PAY_TO = process.env.PAY_TO_VAULT!;
 
 if (!PAY_TO) throw new Error("PAY_TO_VAULT missing");
 
+const web3Promise = initContracts();
+
 app.use(paymentMiddleware(
   PAY_TO,
   {
@@ -28,6 +31,30 @@ app.use(paymentMiddleware(
       network: NETWORK,
       config: {
         description: "Buy 1 USDC worth of tokens from the vending machine.",
+        inputSchema: {
+          type: "object",
+          required: ["token"],
+          properties: {
+            token: { type: "string", description: "Token address" },
+            recipient: { type: "string", description: "Optional recipient address; default is the API caller" }
+          }
+        },
+        outputSchema: {
+          type: "object",
+          properties: {
+            ok: { type: "boolean" },
+            reference: { type: "string" },
+            message: { type: "string" }
+          }
+        }
+      }
+    },
+
+    "POST /buy10x": {
+      price: "$10.00",
+      network: NETWORK,
+      config: {
+        description: "Buy 10 USDC worth of tokens from the vending machine.",
         inputSchema: {
           type: "object",
           required: ["token"],
@@ -73,17 +100,15 @@ app.use(paymentMiddleware(
     },
 
     "POST /metadata/update": {
-      price: "$0.00",
+      price: "$0.01",
       network: NETWORK,
       config: {
-        description: "Creator updates token metadata JSON in R2.",
+        description: "Creator updates token metadata JSON in R2. The API caller (from X-PAYMENT) must be the token creator.",
         inputSchema: {
           type: "object",
-          required: ["token","signer","signature"],
+          required: ["token"],
           properties: {
             token: { type: "string" },
-            signer: { type: "string", description: "EOA that must equal creator in on-chain launch" },
-            signature: { type: "string", description: "personal_sign over deterministic message" },
             imageUrl: { type: "string" },
             website: { type: "string" },
             docs: { type: "string" },
@@ -118,48 +143,50 @@ app.use(paymentMiddleware(
       price: "$0.00",
       network: NETWORK,
       config: { description: "Client config" }
-    },
-
-    "POST /admin/graduate": {
-      price: "$0.00",
-      network: NETWORK,
-      config: {
-        description: "Operator-triggered graduation (onlyOp on-chain).",
-        inputSchema: { type: "object", required: ["token"], properties: { token: { type: "string" } } }
-      }
-    },
-
-    "POST /admin/refund": {
-      price: "$0.00",
-      network: NETWORK,
-      config: {
-        description: "Operator-triggered refund (≥14 days, not graduated).",
-        inputSchema: { type: "object", required: ["token","buyer"], properties: { token: { type: "string" }, buyer: { type: "string" } } }
-      }
     }
   }
 ));
 
-app.post("/buy", async (req, res) => {
+async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
   try {
     const tokenLower = toLowerAddr(req.body?.token);
     const recipient = req.body?.recipient as string | undefined;
 
     const launch = await prisma.launch.findUnique({
       where: { tokenLower },
-      select: { onchainId: true }
+      select: { onchainId: true, graduated: true, targetUsdc6d: true, usdcAccounted6d: true }
     });
-    if (!launch) return res.status(404).json({ error: "unknown_token" });
+    if (!launch || !launch.onchainId) return res.status(404).json({ error: "unknown_token" });
+
+    if (launch.graduated) {
+      return res.status(400).json({ error: "launch_already_graduated" });
+    }
+
+    const remainingUSDC = (launch.targetUsdc6d || 0n) - (launch.usdcAccounted6d || 0n);
+    if (remainingUSDC < expectedUsdcAmount) {
+      return res.status(400).json({
+        error: "insufficient_allocation",
+        remaining_usdc: formatUnits(remainingUSDC, 6)
+      });
+    }
 
     const xp = req.get("x-payment");
     if (!xp) return res.status(400).json({ error: "missing_x_payment_header" });
     const { payer, value, nonce } = parseXPayment(xp);
     if (!payer || value <= 0n) return res.status(400).json({ error: "bad_payment_payload" });
 
+    if (value !== expectedUsdcAmount) {
+      return res.status(400).json({
+        error: "payment_amount_mismatch",
+        expected: expectedUsdcAmount.toString(),
+        received: value.toString()
+      });
+    }
+
     await prisma.purchase.create({
       data: {
         tokenLower,
-        onchainId: launch.onchainId!,
+        onchainId: launch.onchainId,
         payer: recipient || payer,
         usdcAmount6d: value,
         x402Nonce: nonce!,
@@ -172,7 +199,7 @@ app.post("/buy", async (req, res) => {
       payer: recipient || payer,
       usdcAmount6d: value.toString(),
       x402Nonce: nonce
-    });
+    }, undefined, 3);
 
     return res.json({
       ok: true,
@@ -183,6 +210,14 @@ app.post("/buy", async (req, res) => {
     console.error(e);
     res.status(500).json({ error: "server_error" });
   }
+}
+
+app.post("/buy", async (req, res) => {
+  await handleBuy(req, res, 1_000_000n);
+});
+
+app.post("/buy10x", async (req, res) => {
+  await handleBuy(req, res, 10_000_000n);
 });
 
 app.post("/coin", async (req, res) => {
@@ -202,10 +237,11 @@ app.post("/coin", async (req, res) => {
 
   creator = toLowerAddr(creator);
 
-  const bootKey = `tmp/${Date.now()}-${symbol}.json`;
+  const bootKey = `${Date.now()}-${symbol}.json`;
   const metadataPayload = {
     name, symbol,
-    description: req.body?.description ?? `${name} fair launch via x402 Vending Machine`,
+    description: req.body?.description ?? `${name} fair launch via x402 Vending Machine.`,
+    creator: creator,
     image: req.body?.imageUrl || null,
     website: req.body?.website || null,
     docs: req.body?.docs || null,
@@ -219,7 +255,7 @@ app.post("/coin", async (req, res) => {
 
   const job = await enqueueJob("COIN", undefined, {
     name, symbol, size, creator, initialURI: metadataUri
-  });
+  }, undefined, 10);
 
   await prisma.coinRequest.create({
     data: {
@@ -239,15 +275,20 @@ app.post("/coin", async (req, res) => {
 app.post("/metadata/update", async (req, res) => {
   try {
     const tokenLower = toLowerAddr(req.body?.token);
-    const signer = toLowerAddr(req.body?.signer);
-    const signature = String(req.body?.signature || "");
+
+    const xp = req.get("x-payment");
+    if (!xp) return res.status(400).json({ error: "missing_x_payment_header" });
+    const { payer } = parseXPayment(xp);
+    if (!payer) return res.status(400).json({ error: "bad_payment_payload" });
 
     const launch = await prisma.launch.findUnique({
       where: { tokenLower },
       select: { creator: true, contractUri: true, name: true, symbol: true }
     });
     if (!launch) return res.status(404).json({ error: "unknown_token" });
-    if (launch.creator.toLowerCase() !== signer) return res.status(403).json({ error: "not_creator" });
+    if (launch.creator.toLowerCase() !== payer.toLowerCase()) {
+      return res.status(403).json({ error: "not_creator" });
+    }
 
     const updatable = {
       image: req.body?.imageUrl ?? null,
@@ -260,10 +301,6 @@ app.post("/metadata/update", async (req, res) => {
       },
       description: req.body?.description ?? null
     };
-
-    if (!verifyUpdateSignature(signer, tokenLower, updatable, signature)) {
-      return res.status(400).json({ error: "bad_signature" });
-    }
 
     const key = tokenMetadataKey(tokenLower);
     const merged = {
@@ -318,7 +355,20 @@ app.get("/launches", async (req, res) => {
     }
   });
 
-  res.json(launches.map(l => ({ ...l, token: l.tokenLower })));
+  res.json(launches.map(l => ({
+    token: l.tokenLower,
+    onchainId: l.onchainId,
+    name: l.name,
+    symbol: l.symbol,
+    size: l.size,
+    creator: l.creator,
+    contractUri: l.contractUri,
+    graduated: l.graduated,
+    createdAt: l.createdAt,
+    allocated_tokens: formatUnits(l.allocatedTokens.toString(), 18),
+    usdc_accounted: formatUnits(l.usdcAccounted6d, 6),
+    target_usdc: formatUnits(l.targetUsdc6d, 6)
+  })));
 });
 
 app.get("/stats", async (req, res) => {
@@ -356,10 +406,23 @@ app.get("/stats", async (req, res) => {
 
     res.json({
       token: tokenLower,
-      launch: { ...launch, token: tokenLower },
+      launch: {
+        token: tokenLower,
+        onchainId: launch.onchainId,
+        name: launch.name,
+        symbol: launch.symbol,
+        size: launch.size,
+        creator: launch.creator,
+        contractUri: launch.contractUri,
+        graduated: launch.graduated,
+        createdAt: launch.createdAt,
+        allocated_tokens: formatUnits(launch.allocatedTokens.toString(), 18),
+        usdc_accounted: formatUnits(launch.usdcAccounted6d, 6),
+        target_usdc: formatUnits(launch.targetUsdc6d, 6)
+      },
       purchases: {
         count: purchases._count,
-        usdc_sum_6d: purchases._sum.usdcAmount6d || 0n
+        usdc_sum: formatUnits(purchases._sum.usdcAmount6d, 6)
       }
     });
   } catch (e) {
@@ -374,19 +437,6 @@ app.get("/config", (_req, res) => {
     usdc: USDC,
     vault: PAY_TO
   });
-});
-
-app.post("/admin/graduate", async (req, res) => {
-  const tokenLower = toLowerAddr(req.body?.token);
-  const job = await enqueueJob("GRADUATE", `grad:${tokenLower}`, { tokenLower });
-  res.json({ ok: true, reference: String(job.id) });
-});
-
-app.post("/admin/refund", async (req, res) => {
-  const tokenLower = toLowerAddr(req.body?.token);
-  const buyer = toLowerAddr(req.body?.buyer);
-  const job = await enqueueJob("REFUND", `refund:${tokenLower}:${buyer}`, { tokenLower, buyer });
-  res.json({ ok: true, reference: String(job.id) });
 });
 
 app.listen(process.env.PORT || 8080, () => {

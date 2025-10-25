@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import { claimJob, finishJob } from "./queue";
+import { claimJob, finishJob, enqueueJob } from "./queue";
 import { initContracts, pickOperator, readLaunch } from "./web3";
 import pino from "pino";
 
@@ -23,9 +23,8 @@ async function handleCOIN(job: any) {
   const token: string = (parsed.args.token as string).toLowerCase();
   const L = await readLaunch(web3.vm, onchainId);
 
-  await prisma.launch.upsert({
-    where: { tokenLower: token },
-    create: {
+  await prisma.launch.create({
+    data: {
       tokenLower: token,
       onchainId: BigInt(onchainId),
       name,
@@ -38,14 +37,6 @@ async function handleCOIN(job: any) {
       allocatedTokens: L.allocated.toString(),
       targetUsdc6d: L.targetUSDC,
       usdcAccounted6d: L.usdcAccounted
-    },
-    update: {
-      onchainId: BigInt(onchainId),
-      name,
-      symbol,
-      size,
-      creator,
-      contractUri: initialURI
     }
   });
 
@@ -71,6 +62,34 @@ async function handlePURCHASE(job: any) {
   if (!launch || !launch.onchainId) throw new Error("unknown_token");
   const onchainId = Number(launch.onchainId);
 
+  const L = await readLaunch(web3.vm, onchainId);
+
+  if (L.graduated) {
+    log.warn({ tokenLower, payer, x402Nonce }, "Purchase failed: launch already graduated, enqueueing refund");
+    await prisma.purchase.updateMany({
+      where: { tokenLower, x402Nonce },
+      data: { status: "to_refund" }
+    });
+    await enqueueJob("REFUND", `refund:${tokenLower}:${payer}`, { tokenLower, buyer: payer }, undefined, 3);
+    return;
+  }
+
+  const FAIR_CAP = 900_000_000n * 10n ** 18n;
+  const remainingAllocation = FAIR_CAP - L.allocated;
+  const usdcAmountBigInt = BigInt(usdcAmount6d);
+  const TOKENS_PER_USDC_6D = L.size === 0 ? 200_000_000n * 10n ** 12n : L.size === 1 ? 200_000n * 10n ** 12n : 20_000n * 10n ** 12n;
+  const tokensRequested = usdcAmountBigInt * TOKENS_PER_USDC_6D;
+
+  if (tokensRequested > remainingAllocation) {
+    log.warn({ tokenLower, payer, x402Nonce, remainingAllocation: remainingAllocation.toString() }, "Purchase failed: insufficient allocation, enqueueing refund");
+    await prisma.purchase.updateMany({
+      where: { tokenLower, x402Nonce },
+      data: { status: "to_refund" }
+    });
+    await enqueueJob("REFUND", `refund:${tokenLower}:${payer}`, { tokenLower, buyer: payer }, undefined, 3);
+    return;
+  }
+
   const vm = pickOperator(web3.vm, web3.operators);
   const tx = await vm.handlePurchase(onchainId, payer, usdcAmount6d);
   await tx.wait();
@@ -83,15 +102,20 @@ async function handlePURCHASE(job: any) {
     }
   });
 
-  const L = await readLaunch(web3.vm, onchainId);
+  const updatedL = await readLaunch(web3.vm, onchainId);
   await prisma.launch.update({
     where: { tokenLower },
     data: {
-      allocatedTokens: L.allocated.toString(),
-      usdcAccounted6d: L.usdcAccounted,
-      graduated: L.graduated
+      allocatedTokens: updatedL.allocated.toString(),
+      usdcAccounted6d: updatedL.usdcAccounted,
+      graduated: updatedL.graduated
     }
   });
+
+  if (!updatedL.graduated && updatedL.usdcAccounted >= updatedL.targetUSDC) {
+    await enqueueJob("GRADUATE", `grad:${tokenLower}`, { tokenLower }, undefined, 10);
+    log.info({ tokenLower, onchainId }, "Auto-enqueued GRADUATE job - target USDC reached");
+  }
 }
 
 async function handleGRADUATE(job: any) {

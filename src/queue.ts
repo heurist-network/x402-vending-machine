@@ -1,7 +1,13 @@
 import { prisma } from "./db";
 import { Prisma } from "@prisma/client";
 
-export async function enqueueJob(kind: string, uniqueKey: string | undefined, payload: any, runAfter?: Date) {
+export async function enqueueJob(
+  kind: string,
+  uniqueKey: string | undefined,
+  payload: any,
+  runAfter?: Date,
+  maxAttempts?: number
+) {
   return await prisma.job.upsert({
     where: {
       kind_uniqueKey: uniqueKey ? { kind, uniqueKey } : { kind, uniqueKey: "" }
@@ -10,7 +16,8 @@ export async function enqueueJob(kind: string, uniqueKey: string | undefined, pa
       kind,
       uniqueKey,
       payload: payload as Prisma.InputJsonValue,
-      runAfter: runAfter || new Date()
+      runAfter: runAfter || new Date(),
+      maxAttempts: maxAttempts ?? 8
     },
     update: {
       payload: payload as Prisma.InputJsonValue
@@ -52,12 +59,16 @@ export async function finishJob(id: bigint, ok: boolean, err?: any) {
     if (!job) return;
 
     const newAttempts = job.attempts + 1;
+    const isDead = newAttempts >= job.maxAttempts;
+
+    const delayMs = Math.min(10000 * Math.pow(2, newAttempts - 1), 300000);
+
     await prisma.job.update({
       where: { id },
       data: {
         attempts: newAttempts,
-        status: newAttempts >= job.maxAttempts ? "dead" : "failed",
-        runAfter: newAttempts >= job.maxAttempts ? job.runAfter : new Date(Date.now() + 30000)
+        status: isDead ? "dead" : "failed",
+        runAfter: isDead ? job.runAfter : new Date(Date.now() + delayMs)
       }
     });
   }
