@@ -17,12 +17,6 @@ contract X402Token is ERC20, EIP712, AccessControl, IERC7572 {
     string  private _contractURI;
     bool    public transfersEnabled;  // locked until graduation
 
-    // --- errors
-    error NotMinter();
-    error NotBurner();
-    error CapExceeded();
-    error TransfersDisabled();
-
     // --- ERC-3009 typehashes
     bytes32 public constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH =
         0x7c7c6cdb67a18743f49ec6fa9b35f50d52ed05cbed4cc592e13b44501c1a2267;
@@ -35,7 +29,9 @@ contract X402Token is ERC20, EIP712, AccessControl, IERC7572 {
 
     // --- Errors
     error NotMinter();
+    error NotBurner();
     error CapExceeded();
+    error TransfersDisabled();
     error AuthorizationUsed();
     error AuthorizationExpired();
     error InvalidSignature();

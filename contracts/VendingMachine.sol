@@ -45,7 +45,6 @@ contract VendingMachine is AccessControl {
         address creator;     // ERC-7572 setter
         address token;       // X402Token
         Size size;
-        uint24 v3Fee;
         uint64 createdAt;
 
         // accounting
@@ -69,10 +68,13 @@ contract VendingMachine is AccessControl {
     // --- Global accounting for solvency checks against pooled vault
     uint256 public usdcAccountedTotal;  // sum over launches (6d)
 
+    // --- HEU price oracle (18 decimals, e.g., 0.04e18 = $0.04 per HEU)
+    uint256 public heuOraclePrice;
+
     address[] private _operators;
 
     // --- Events
-    event Coined(uint256 indexed id, address token, Size size, address creator, uint24 v3Fee, string contractURI);
+    event Coined(uint256 indexed id, address token, Size size, address creator, string contractURI);
     event PurchaseRecorded(uint256 indexed id, address buyer, uint256 usdcAmount, uint256 tokensAllocated);
     event Graduated(uint256 indexed id, uint256 usdcIn, uint256 heuOut, uint256 lpBurned);
     event Claimed(uint256 indexed id, address buyer, uint256 tokens);
@@ -80,6 +82,7 @@ contract VendingMachine is AccessControl {
     event EmergencyWithdrawn(uint256 usdcAmount, address to);
     event OperatorAdded(address indexed operator);
     event OperatorRemoved(address indexed operator);
+    event HeuOraclePriceUpdated(uint256 newPrice);
 
     constructor(address admin, address[] memory initialOperators) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -143,14 +146,18 @@ contract VendingMachine is AccessControl {
         return hasRole(OPERATOR_ROLE, account);
     }
 
-    // --- Factory: coin (deploy token, no per-launch vault)
+    function updateHeuOraclePrice(uint256 newPrice) external onlyOp {
+        if (newPrice == 0) revert Zero();
+        heuOraclePrice = newPrice;
+        emit HeuOraclePriceUpdated(newPrice);
+    }
+
     function coin(
         string memory name_,
         string memory symbol_,
         string memory initialContractURI,
         address creator,
-        Size size,
-        uint24 v3Fee
+        Size size
     ) external onlyOp returns (uint256 id, address token) {
         if (size != Size.S && size != Size.L && size != Size.TEST) revert InvalidSize();
 
@@ -170,7 +177,6 @@ contract VendingMachine is AccessControl {
         L.creator   = creator;
         L.token     = token;
         L.size      = size;
-        L.v3Fee     = v3Fee;
         L.createdAt = uint64(block.timestamp);
         L.fairCap   = 900_000_000e18;
         // TEST = 4.5 USDC, S = 4500 USDC, L = 45000 USDC
@@ -178,10 +184,9 @@ contract VendingMachine is AccessControl {
 
         launchByToken[token] = id;
 
-        emit Coined(id, token, size, creator, v3Fee, initialContractURI);
+        emit Coined(id, token, size, creator, initialContractURI);
     }
 
-    // --- Settlement hook (operator): record contribution + allocation (no mint yet)
     function handlePurchase(uint256 id, address buyer, uint256 usdcAmount) external onlyOp {
         if (usdcAmount == 0) revert Zero();
         Launch storage L = _get(id);
@@ -210,7 +215,6 @@ contract VendingMachine is AccessControl {
         emit PurchaseRecorded(id, buyer, usdcAmount, tokens);
     }
 
-    // Optional batch helper (unchanged logic; pooled solvency)
     function handleBatchPurchase(uint256 id, address[] calldata buyers, uint256 usdcAmount) external onlyOp {
         if (usdcAmount == 0 || buyers.length == 0) revert Zero();
         Launch storage L = _get(id);
@@ -233,46 +237,55 @@ contract VendingMachine is AccessControl {
         L.allocated     += totalTokens;
         usdcAccountedTotal += totalAmount;
 
+        address token = L.token;
         for (uint256 i = 0; i < buyers.length; i++) {
             address b = buyers[i];
             contributions6d[id][b] += usdcAmount;
             allocations[id][b]     += tokensPerBuyer;
-            X402Token(L.token).mint(b, tokensPerBuyer);
+            X402Token(token).mint(b, tokensPerBuyer);
             emit PurchaseRecorded(id, b, usdcAmount, tokensPerBuyer);
         }
     }
 
-    // --- Graduate (anyone): only when EXACTLY 900M allocated
-    function graduate(uint256 id, uint256 minHeuOut, uint256 minTokenForLP, uint256 minHeuForLP) external {
+    // --- Graduate (operator only): only when EXACTLY 900M allocated
+    function graduate(uint256 id) external onlyOp {
         Launch storage L = _get(id);
         if (L.graduated) revert AlreadyGraduated();
         if (L.allocated != L.fairCap) revert NotGraduatable();
 
         uint256 usdcIn = L.usdcAccounted;
         if (usdcIn == 0 || USDC.balanceOf(vault) < usdcIn) revert VaultInsufficient();
+        if (heuOraclePrice == 0) revert Zero();
+
+        // Calculate minHeuOut with 90% slippage tolerance
+        // expectedHEU = usdcIn (6d) * 1e18 / heuOraclePrice (18d) = HEU in 18d
+        // minHeuOut = expectedHEU * 0.1 (accept 10% of expected, i.e., 90% slippage)
+        uint256 expectedHEU = (usdcIn * 1e18) / heuOraclePrice;
+        uint256 minHeuOut = expectedHEU / 10;
 
         TreasuryVault(vault).swapUSDCforHEU(
-            V3_ROUTER, USDC, HEU, L.v3Fee, usdcIn, minHeuOut
+            V3_ROUTER, USDC, HEU, 10000, usdcIn, minHeuOut
         );
-        // keep the vault's HEU; decrease the pooled accounting
+        // decrease the pooled accounting
         usdcAccountedTotal -= usdcIn;
         L.usdcAccounted = 0;
 
+        address token = L.token;
+        X402Token(token).enableTransfers();
+
         // Mint 100M to vault, then add v2 liquidity with ALL HEU acquired
-        X402Token(L.token).mint(vault, 100_000_000e18);
+        X402Token(token).mint(vault, 100_000_000e18);
         uint256 heuBal = HEU.balanceOf(vault);
         TreasuryVault(vault).addLiquidityV2(
-            V2_ROUTER, IERC20(L.token), HEU,
+            V2_ROUTER, IERC20(token), HEU,
             100_000_000e18, heuBal,
-            minTokenForLP, minHeuForLP
+            0, 0 // no slippage protection needed for new pool
         );
 
-        X402Token(L.token).enableTransfers();
         L.graduated = true;
         emit Graduated(id, usdcIn, heuBal, 0);
     }
 
-    // --- Refund window predicate (by token address)
     function refundable(address tokenAddress) external view returns (bool) {
         uint256 id = launchByToken[tokenAddress];
         if (id == 0) return false;
