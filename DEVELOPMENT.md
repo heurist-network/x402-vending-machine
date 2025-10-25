@@ -11,6 +11,7 @@ This system uses an asynchronous job queue pattern to handle blockchain operatio
 - **API Layer**: Fast, accepts requests and enqueues jobs
 - **Worker Layer**: Processes jobs asynchronously, interacts with blockchain
 - **Database**: Shared state between API and worker
+- **Watchdog**: Releases stale `in_progress` jobs so fresh workers can claim them
 
 ### Job Types
 
@@ -22,6 +23,12 @@ This system uses an asynchronous job queue pattern to handle blockchain operatio
 ---
 
 ## Processing Flows
+
+### Worker Concurrency & Supervision
+
+- The worker process spawns `WORKER_CONCURRENCY` parallel async loops (default 2) to drive multiple operator wallets at once.
+- Jobs are leased for `JOB_LEASE_MS` (default 5 minutes). If a worker stalls, the watchdog (interval `WATCHDOG_INTERVAL_MS`, default 60 seconds) unlocks and re-queues the job.
+- Use PM2 to manage services: `pm2 start ecosystem.config.js` launches `vending-api` and `vending-worker` with auto-restart. Adjust env vars per app in the PM2 config.
 
 ### 1. COIN Flow (Token Creation)
 

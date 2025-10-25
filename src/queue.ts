@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import { Prisma } from "@prisma/client";
+import { Prisma, Job } from "@prisma/client";
 
 export async function enqueueJob(
   kind: string,
@@ -27,15 +27,17 @@ export async function enqueueJob(
 
 export async function claimJob(workerId: string) {
   return await prisma.$transaction(async (tx) => {
-    const job = await tx.job.findFirst({
-      where: {
-        status: "queued",
-        runAfter: { lte: new Date() }
-      },
-      orderBy: { id: "asc" }
-    });
+    const jobs = await tx.$queryRaw<Job[]>`
+      SELECT * FROM "jobs"
+      WHERE status = 'queued' AND run_after <= NOW()
+      ORDER BY id ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    `;
 
-    if (!job) return null;
+    if (!jobs.length) return null;
+
+    const job = jobs[0];
 
     return await tx.job.update({
       where: { id: job.id },
@@ -52,7 +54,11 @@ export async function finishJob(id: bigint, ok: boolean, err?: any) {
   if (ok) {
     await prisma.job.update({
       where: { id },
-      data: { status: "done" }
+      data: {
+        status: "done",
+        lockedBy: null,
+        lockedAt: null
+      }
     });
   } else {
     const job = await prisma.job.findUnique({ where: { id } });
@@ -67,9 +73,29 @@ export async function finishJob(id: bigint, ok: boolean, err?: any) {
       where: { id },
       data: {
         attempts: newAttempts,
-        status: isDead ? "dead" : "failed",
-        runAfter: isDead ? job.runAfter : new Date(Date.now() + delayMs)
+        status: isDead ? "dead" : "queued",
+        runAfter: isDead ? job.runAfter : new Date(Date.now() + delayMs),
+        lockedBy: null,
+        lockedAt: null
       }
     });
   }
+}
+
+export async function releaseStaleJobs(leaseMs: number) {
+  if (leaseMs <= 0) return 0;
+  const cutoff = new Date(Date.now() - leaseMs);
+  const result = await prisma.job.updateMany({
+    where: {
+      status: "in_progress",
+      lockedAt: { lt: cutoff }
+    },
+    data: {
+      status: "queued",
+      lockedBy: null,
+      lockedAt: null,
+      runAfter: new Date()
+    }
+  });
+  return result.count;
 }

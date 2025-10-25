@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import { claimJob, finishJob, enqueueJob } from "./queue";
+import { claimJob, finishJob, enqueueJob, releaseStaleJobs } from "./queue";
 import { initContracts, pickOperator, readLaunch } from "./web3";
 import { tokenMetadataKey, uploadMetadataJson, getMetadataJson } from "./r2";
 import pino from "pino";
@@ -8,6 +8,14 @@ const log = pino({ level: process.env.LOG_LEVEL || "info" });
 const WORKER_ID = `vm-worker-${process.pid}`;
 
 const web3 = await initContracts();
+const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY || "2");
+const IDLE_DELAY_MS = Number(process.env.WORKER_IDLE_DELAY_MS || "500");
+const JOB_LEASE_MS = Number(process.env.JOB_LEASE_MS || "300000");
+const WATCHDOG_INTERVAL_MS = Number(process.env.WATCHDOG_INTERVAL_MS || "60000");
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function handleCOIN(job: any) {
   const { launchId, name, symbol, initialURI, creator, size } = job.payload;
@@ -166,9 +174,13 @@ async function handleREFUND(job: any) {
   });
 }
 
-async function loop() {
+async function processNextJob() {
   const job = await claimJob(WORKER_ID);
-  if (!job) return;
+  if (!job) {
+    await sleep(IDLE_DELAY_MS);
+    return;
+  }
+
   try {
     if (job.kind === "COIN") await handleCOIN(job);
     else if (job.kind === "PURCHASE") await handlePURCHASE(job);
@@ -190,4 +202,30 @@ async function loop() {
   }
 }
 
-setInterval(loop, 500);
+async function workerLoop(slot: number) {
+  log.info({ slot, concurrency: CONCURRENCY }, "Worker slot started");
+  while (true) {
+    await processNextJob();
+  }
+}
+
+for (let i = 0; i < CONCURRENCY; i++) {
+  workerLoop(i).catch((err) => {
+    console.error("Worker loop crashed", err);
+    process.exit(1);
+  });
+}
+
+if (WATCHDOG_INTERVAL_MS > 0 && JOB_LEASE_MS > 0) {
+  setInterval(() => {
+    releaseStaleJobs(JOB_LEASE_MS)
+      .then((count) => {
+        if (count > 0) {
+          log.warn({ count }, "Watchdog released stale jobs");
+        }
+      })
+      .catch((err) => {
+        console.error("Watchdog failed", err);
+      });
+  }, WATCHDOG_INTERVAL_MS).unref?.();
+}
