@@ -1,4 +1,3 @@
-import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import pino from "pino";
@@ -6,7 +5,7 @@ import { paymentMiddleware } from "x402-express";
 import { formatUnits } from "ethers";
 import { prisma } from "./db";
 import { enqueueJob } from "./queue";
-import { tokenMetadataKey, uploadMetadataJson } from "./r2";
+import { tokenMetadataKey, uploadMetadataJson, getMetadataJson } from "./r2";
 import { parseXPayment, toLowerAddr } from "./xpay";
 import { initContracts, readLaunch } from "./web3";
 
@@ -85,7 +84,7 @@ app.use(paymentMiddleware(
           properties: {
             name: { type: "string" },
             symbol: { type: "string" },
-            creator: { type: "string", description: "The address that receives CONTRACT_URI_SETTER_ROLE (can update token metadata). Default is the API caller." },
+            creator: { type: "string", description: "The address that can update token metadata. Default is the API caller." },
             size: { type: "string", enum: ["TEST","S","L"] },
             imageUrl: { type: "string" },
             website: { type: "string" },
@@ -103,12 +102,12 @@ app.use(paymentMiddleware(
       price: "$0.01",
       network: NETWORK,
       config: {
-        description: "Creator updates token metadata JSON in R2. The API caller (from X-PAYMENT) must be the token creator.",
+        description: "Update token metadata. You must be the token creator to call this endpoint.",
         inputSchema: {
           type: "object",
           required: ["token"],
           properties: {
-            token: { type: "string" },
+            token: { type: "string", description: "The token contract address, starting with 0x" },
             imageUrl: { type: "string" },
             website: { type: "string" },
             docs: { type: "string" },
@@ -121,28 +120,42 @@ app.use(paymentMiddleware(
       }
     },
 
-    "GET /launches": {
-      price: "$0.00",
+    "POST /launches": {
+      price: "$0.01",
       network: NETWORK,
       config: {
-        description: "List launches; filter by open|graduated|refundable with ?filter=",
+        description: "List token launches with optional filtering.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            filter: {
+              type: "string",
+              enum: ["open", "graduated", "refundable"],
+              description: "Filter launches: 'open' (not graduated, created within 14 days), 'graduated', 'refundable' (not graduated, older than 14 days). Omit to return all launches."
+            }
+          }
+        },
         outputSchema: { type: "array" }
       }
     },
 
-    "GET /stats": {
-      price: "$0.00",
+    "POST /token_info": {
+      price: "$0.001",
       network: NETWORK,
       config: {
-        description: "Stats for a token; ?token=0x...",
+        description: "Get detailed information about a specific token launch, including purchase statistics.",
+        inputSchema: {
+          type: "object",
+          required: ["token"],
+          properties: {
+            token: {
+              type: "string",
+              description: "The token contract address (e.g., 0x...)"
+            }
+          }
+        },
         outputSchema: { type: "object" }
       }
-    },
-
-    "GET /config": {
-      price: "$0.00",
-      network: NETWORK,
-      config: { description: "Client config" }
     }
   }
 ));
@@ -237,7 +250,7 @@ app.post("/coin", async (req, res) => {
 
   creator = toLowerAddr(creator);
 
-  const bootKey = `${Date.now()}-${symbol}.json`;
+  const tempKey = `temp/${Date.now()}-${symbol}.json`;
   const metadataPayload = {
     name, symbol,
     description: req.body?.description ?? `${name} fair launch via x402 Vending Machine.`,
@@ -251,7 +264,7 @@ app.post("/coin", async (req, res) => {
       discord: req.body?.discord || null
     }
   };
-  const metadataUri = await uploadMetadataJson(bootKey, metadataPayload);
+  const metadataUri = await uploadMetadataJson(tempKey, metadataPayload);
 
   const job = await enqueueJob("COIN", undefined, {
     name, symbol, size, creator, initialURI: metadataUri
@@ -290,40 +303,41 @@ app.post("/metadata/update", async (req, res) => {
       return res.status(403).json({ error: "not_creator" });
     }
 
-    const updatable = {
-      image: req.body?.imageUrl ?? null,
-      website: req.body?.website ?? null,
-      docs: req.body?.docs ?? null,
-      links: {
-        twitter: req.body?.twitter ?? null,
-        telegram: req.body?.telegram ?? null,
-        discord: req.body?.discord ?? null
-      },
-      description: req.body?.description ?? null
-    };
-
     const key = tokenMetadataKey(tokenLower);
-    const merged = {
+    let existing: any;
+    try {
+      existing = await getMetadataJson(key);
+    } catch {
+      return res.status(404).json({ error: "metadata_not_found" });
+    }
+
+    const merged: any = {
       name: launch.name,
       symbol: launch.symbol,
-      ...updatable
+      ...existing
     };
-    const uri = await uploadMetadataJson(key, merged);
 
-    await prisma.launch.update({
-      where: { tokenLower },
-      data: { contractUri: uri }
-    });
+    if (req.body?.imageUrl !== undefined) merged.image = req.body.imageUrl;
+    if (req.body?.website !== undefined) merged.website = req.body.website;
+    if (req.body?.docs !== undefined) merged.docs = req.body.docs;
+    if (req.body?.description !== undefined) merged.description = req.body.description;
 
-    res.json({ ok: true, contractURI: uri });
+    if (!merged.links) merged.links = {};
+    if (req.body?.twitter !== undefined) merged.links.twitter = req.body.twitter;
+    if (req.body?.telegram !== undefined) merged.links.telegram = req.body.telegram;
+    if (req.body?.discord !== undefined) merged.links.discord = req.body.discord;
+
+    await uploadMetadataJson(key, merged);
+
+    res.json({ ok: true });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "server_error" });
   }
 });
 
-app.get("/launches", async (req, res) => {
-  const filter = String(req.query.filter || "").toLowerCase();
+app.post("/launches", async (req, res) => {
+  const filter = String(req.body?.filter || "").toLowerCase();
   const now14 = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
 
   let where = {};
@@ -371,9 +385,12 @@ app.get("/launches", async (req, res) => {
   })));
 });
 
-app.get("/stats", async (req, res) => {
+app.post("/token_info", async (req, res) => {
   try {
-    const tokenLower = toLowerAddr(String(req.query.token || ""));
+    const tokenLower = toLowerAddr(String(req.body?.token || ""));
+    if (!/^0x[a-fA-F0-9]{40}$/.test(tokenLower)) {
+      return res.status(400).json({ error: "invalid_token" });
+    }
 
     const launch = await prisma.launch.findUnique({
       where: { tokenLower },
@@ -387,7 +404,6 @@ app.get("/stats", async (req, res) => {
         contractUri: true,
         graduated: true,
         createdAt: true,
-        allocatedTokens: true,
         usdcAccounted6d: true,
         targetUsdc6d: true
       }
@@ -395,14 +411,29 @@ app.get("/stats", async (req, res) => {
 
     if (!launch) return res.status(404).json({ error: "unknown_token" });
 
-    const purchases = await prisma.purchase.aggregate({
+    const queuedPurchases = await prisma.purchase.aggregate({
       where: {
         tokenLower,
-        status: { in: ["queued", "handled"] }
+        status: "queued"
       },
       _count: true,
       _sum: { usdcAmount6d: true }
     });
+
+    const handledPurchases = await prisma.purchase.aggregate({
+      where: {
+        tokenLower,
+        status: "handled"
+      },
+      _count: true,
+      _sum: { usdcAmount6d: true }
+    });
+
+    let metadata = null;
+    try {
+      const key = tokenMetadataKey(tokenLower);
+      metadata = await getMetadataJson(key);
+    } catch {}
 
     res.json({
       token: tokenLower,
@@ -416,27 +447,24 @@ app.get("/stats", async (req, res) => {
         contractUri: launch.contractUri,
         graduated: launch.graduated,
         createdAt: launch.createdAt,
-        allocated_tokens: formatUnits(launch.allocatedTokens.toString(), 18),
         usdc_accounted: formatUnits(launch.usdcAccounted6d, 6),
         target_usdc: formatUnits(launch.targetUsdc6d, 6)
       },
+      metadata,
       purchases: {
-        count: purchases._count,
-        usdc_sum: formatUnits(purchases._sum.usdcAmount6d, 6)
+        queued: {
+          count: queuedPurchases._count,
+          usdc_sum: formatUnits(queuedPurchases._sum.usdcAmount6d || 0n, 6)
+        },
+        handled: {
+          count: handledPurchases._count,
+          usdc_sum: formatUnits(handledPurchases._sum.usdcAmount6d || 0n, 6)
+        }
       }
     });
   } catch (e) {
     return res.status(400).json({ error: "bad_token" });
   }
-});
-
-app.get("/config", (_req, res) => {
-  res.json({
-    chainId: Number(process.env.CHAIN_ID_BASE || 8453),
-    vendingMachine: process.env.VENDING_MACHINE_ADDRESS,
-    usdc: USDC,
-    vault: PAY_TO
-  });
 });
 
 app.listen(process.env.PORT || 8080, () => {

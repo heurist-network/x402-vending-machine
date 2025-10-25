@@ -1,6 +1,7 @@
 import { prisma } from "./db";
 import { claimJob, finishJob, enqueueJob } from "./queue";
 import { initContracts, pickOperator, readLaunch } from "./web3";
+import { tokenMetadataKey, uploadMetadataJson, getMetadataJson } from "./r2";
 import pino from "pino";
 
 const log = pino({ level: process.env.LOG_LEVEL || "info" });
@@ -23,6 +24,11 @@ async function handleCOIN(job: any) {
   const token: string = (parsed.args.token as string).toLowerCase();
   const L = await readLaunch(web3.vm, onchainId);
 
+  const tempKey = initialURI.split('/').pop()!;
+  const metadata = await getMetadataJson(tempKey);
+  const finalKey = tokenMetadataKey(token);
+  const finalUri = await uploadMetadataJson(finalKey, metadata);
+
   await prisma.launch.create({
     data: {
       tokenLower: token,
@@ -31,7 +37,7 @@ async function handleCOIN(job: any) {
       symbol,
       size,
       creator,
-      contractUri: initialURI,
+      contractUri: finalUri,
       createdAt: new Date(L.createdAt * 1000),
       graduated: L.graduated,
       allocatedTokens: L.allocated.toString(),
