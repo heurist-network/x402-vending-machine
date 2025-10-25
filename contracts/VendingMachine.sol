@@ -39,6 +39,8 @@ contract VendingMachine is AccessControl {
     uint256 private constant TOKENS_PER_USDC_S_6D    = 200_000 * 1e12;     // Small
     uint256 private constant TOKENS_PER_USDC_L_6D    =  20_000 * 1e12;     // Large
 
+    uint256 public constant FAIR_CAP = 900_000_000e18;
+
     enum Size { TEST, S, L }
 
     struct Launch {
@@ -48,7 +50,6 @@ contract VendingMachine is AccessControl {
         uint64 createdAt;
 
         // accounting
-        uint256 fairCap;         // 900M (18d)
         uint256 allocated;       // total allocated to buyers (18d)
         uint256 targetUSDC;      // 4,500e6 (S) or 45,000e6 (L)
         uint256 usdcAccounted;   // sum of contributions for this launch (6d)
@@ -178,7 +179,6 @@ contract VendingMachine is AccessControl {
         L.token     = token;
         L.size      = size;
         L.createdAt = uint64(block.timestamp);
-        L.fairCap   = 900_000_000e18;
         // TEST = 4.5 USDC, S = 4500 USDC, L = 45000 USDC
         L.targetUSDC= (size == Size.TEST) ? 4_500_000 : (size == Size.S) ? 4_500e6 : 45_000e6;
 
@@ -202,7 +202,7 @@ contract VendingMachine is AccessControl {
                                     TOKENS_PER_USDC_L_6D;
         uint256 tokens = usdcAmount * perUSDC;
 
-        if (L.allocated + tokens > L.fairCap) revert CapExceeded();
+        if (L.allocated + tokens > FAIR_CAP) revert CapExceeded();
 
         contributions6d[id][buyer] += usdcAmount;
         allocations[id][buyer]     += tokens;
@@ -231,7 +231,7 @@ contract VendingMachine is AccessControl {
         uint256 tokensPerBuyer = usdcAmount * perUSDC;
         uint256 totalTokens    = tokensPerBuyer * buyers.length;
 
-        if (L.allocated + totalTokens > L.fairCap) revert CapExceeded();
+        if (L.allocated + totalTokens > FAIR_CAP) revert CapExceeded();
 
         L.usdcAccounted += totalAmount;
         L.allocated     += totalTokens;
@@ -251,7 +251,7 @@ contract VendingMachine is AccessControl {
     function graduate(uint256 id) external onlyOp {
         Launch storage L = _get(id);
         if (L.graduated) revert AlreadyGraduated();
-        if (L.allocated != L.fairCap) revert NotGraduatable();
+        if (L.allocated != FAIR_CAP) revert NotGraduatable();
 
         uint256 usdcIn = L.usdcAccounted;
         if (usdcIn == 0 || USDC.balanceOf(vault) < usdcIn) revert VaultInsufficient();

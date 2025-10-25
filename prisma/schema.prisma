@@ -1,0 +1,77 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Launch {
+  tokenLower       String     @id @map("token_lower")
+  onchainId        BigInt?    @unique @map("onchain_id")
+  name             String
+  symbol           String
+  size             String
+  creator          String
+  contractUri      String     @map("contract_uri")
+  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  graduated        Boolean    @default(false)
+  allocatedTokens  Decimal?   @map("allocated_tokens")
+  targetUsdc6d     BigInt?    @map("target_usdc_6d")
+  usdcAccounted6d  BigInt?    @map("usdc_accounted_6d")
+  purchases        Purchase[]
+
+  @@map("launches")
+}
+
+model Purchase {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tokenLower    String   @map("token_lower")
+  onchainId     BigInt   @map("onchain_id")
+  payer         String
+  usdcAmount6d  BigInt   @map("usdc_amount_6d")
+  x402Nonce     String   @unique @map("x402_nonce")
+  settleTx      String?  @map("settle_tx")
+  status        String   @default("queued")
+  operator      String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  launch        Launch   @relation(fields: [tokenLower], references: [tokenLower])
+
+  @@map("purchases")
+}
+
+model CoinRequest {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String
+  symbol      String
+  size        String
+  creator     String
+  metadataUri String?  @map("metadata_uri")
+  tokenLower  String?  @map("token_lower")
+  onchainId   BigInt?  @map("onchain_id")
+  txHash      String?  @map("tx_hash")
+  status      String   @default("queued")
+  error       String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("coin_requests")
+}
+
+model Job {
+  id          BigInt   @id @default(autoincrement())
+  kind        String
+  uniqueKey   String?  @map("unique_key")
+  payload     Json
+  status      String   @default("queued")
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(8) @map("max_attempts")
+  runAfter    DateTime @default(now()) @map("run_after") @db.Timestamptz
+  lockedBy    String?  @map("locked_by")
+  lockedAt    DateTime? @map("locked_at") @db.Timestamptz
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([status, runAfter], map: "jobs_q_idx")
+  @@unique([kind, uniqueKey], map: "jobs_kind_uk_idx")
+  @@map("jobs")
+}
