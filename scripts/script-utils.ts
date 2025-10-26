@@ -65,8 +65,10 @@ export function getAccountFromEnv(envName: string) {
   return privateKeyToAccount(key);
 }
 
-export function createPaymentFetch(account: ReturnType<typeof privateKeyToAccount>) {
-  return wrapFetchWithPayment(fetch, account);
+export function createPaymentFetch(account: ReturnType<typeof privateKeyToAccount>, maxValue?: bigint) {
+  // Default to 20 USDC max to support all buy endpoints (buy10x is the highest at 10 USDC)
+  const defaultMaxValue = BigInt(20 * 10 ** 6);
+  return wrapFetchWithPayment(fetch, account, maxValue ?? defaultMaxValue);
 }
 
 export async function safeJson<T = unknown>(response: Response): Promise<T | null> {

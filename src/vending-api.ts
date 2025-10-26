@@ -42,6 +42,21 @@ app.use(paymentMiddleware(
       }
     },
 
+    "POST /buyHalf": {
+      price: "$0.50",
+      network: NETWORK,
+      config: {
+        description: "Buy 0.50 USDC. Testing only.",
+        inputSchema: {
+          bodyType: "json",
+          bodyFields: {
+            token: { type: "string", description: "Token address", required: true },
+            recipient: { type: "string", description: "Optional recipient address; default is the API caller" }
+          }
+        }
+      }
+    },
+
     "POST /buy": {
       price: "$1.00",
       network: NETWORK,
@@ -202,7 +217,7 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
 
     const launch = await prisma.launch.findUnique({
       where: { tokenLower },
-      select: { onchainId: true, graduated: true, targetUsdc6d: true, usdcAccounted6d: true }
+      select: { onchainId: true, graduated: true, targetUsdc6d: true, usdcAccounted6d: true, usdcQueued6d: true }
     });
     if (!launch || !launch.onchainId) return res.status(404).json({ error: "unknown_token" });
 
@@ -219,9 +234,25 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
       });
     }
 
+    let msg = "";
+
     const actualRecipient = recipient || payer;
-    const remainingUSDC = (launch.targetUsdc6d || 0n) - (launch.usdcAccounted6d || 0n);
+    const remainingUSDC = (launch.targetUsdc6d || 0n) - (launch.usdcAccounted6d || 0n); // remaining allocation in USDC
+    const queuedUSDC = (launch.usdcQueued6d || 0n);
     const needsRefund = launch.graduated || remainingUSDC < expectedUsdcAmount;
+
+    if (queuedUSDC > remainingUSDC) {
+      msg = "There are more queued purchases than remaining allocation. Your payment will likely be refunded.";
+    }
+    else if (launch.graduated) {
+      msg = "Launch already graduated. Your payment will be refunded.";
+    }
+    else if (remainingUSDC < expectedUsdcAmount) {
+      msg = "Insufficient allocation remaining. Your payment will be refunded.";
+    }
+    else {
+      msg = "Payment received. Your tokens will be transferred to you shortly.";
+    }
 
     const purchase = await prisma.$transaction(async (tx) => {
       const created = await tx.purchase.create({
@@ -257,9 +288,7 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
       return res.json({
         ok: true,
         reference: purchase.id,
-        message: launch.graduated
-          ? "Launch already graduated. Your payment will be refunded."
-          : "Insufficient allocation remaining. Your payment will be refunded."
+        message: msg
       });
     }
 
@@ -273,7 +302,7 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
     return res.json({
       ok: true,
       reference: purchase.id,
-      message: "Payment received. Your tokens will be transferred to you shortly."
+      message: msg
     });
   } catch (e) {
     log.error({ err: e }, "handleBuy failed");
@@ -289,6 +318,14 @@ app.post("/buy", async (req, res) => {
 
 app.post("/buy10x", async (req, res) => {
   await handleBuy(req, res, 10_000_000n);
+});
+
+app.post("/buyHalf", async (req, res) => {
+  await handleBuy(req, res, 500_000n);
+});
+
+app.post("/buyTest", async (req, res) => {
+  await handleBuy(req, res, 4_500_000n);
 });
 
 app.post("/coin", async (req, res) => {
@@ -438,7 +475,6 @@ app.post("/launches", async (req, res) => {
         symbol: true,
         size: true,
         creator: true,
-        contractUri: true,
         graduated: true,
         createdAt: true,
         usdcAccounted6d: true,
@@ -450,19 +486,18 @@ app.post("/launches", async (req, res) => {
     res.json({
       data: launches.map(l => ({
         token: l.tokenLower,
-        onchainId: l.onchainId,
+        onchainId: l.onchainId?.toString(),
         name: l.name,
         symbol: l.symbol,
         size: l.size,
         creator: l.creator,
-        contractUri: l.contractUri,
         graduated: l.graduated,
         createdAt: l.createdAt,
         usdc_accounted: formatUnits(l.usdcAccounted6d ?? 0n, 6),
         target_usdc: formatUnits(l.targetUsdc6d ?? 0n, 6),
         usdc_queued: formatUnits(l.usdcQueued6d ?? 0n, 6)
       })),
-      notes: "The data is cached and might not be up-to-date. Call the token_info API to get fresh information for a specific token."
+      notes: "The data is cached and might not be up-to-date. Call the token_info API to get fresh and more detailed information for a specific token."
     });
   } catch (e) {
     log.error({ err: e }, "/launches failed");
@@ -526,7 +561,7 @@ app.post("/token_info", async (req, res) => {
       token: tokenLower,
       launch: {
         token: tokenLower,
-        onchainId: launch.onchainId,
+        onchainId: launch.onchainId?.toString(),
         name: launch.name,
         symbol: launch.symbol,
         size: launch.size,
@@ -569,15 +604,24 @@ app.post("/buy_status", async (req, res) => {
       return res.status(404).json({ error: "purchase_not_found" });
     }
 
+    let notes = "";
+    if (purchase.status === "completed") {
+      notes = "Purchase completed. The tokens have been transferred to your wallet. tx_hash should already be available.";
+    } else if (purchase.status === "to_refund") {
+      notes = "Purchase failed. The payment will be refunded.";
+    } else if (purchase.status === "queued") {
+      notes = "Purchase is still in progress. Please check back later.";
+    }
+
     res.json({
-      reference,
       status: purchase.status,
       token: purchase.tokenLower,
       payer: purchase.payer,
       recipient: purchase.recipient,
       usdc_amount: formatUnits(purchase.usdcAmount6d, 6),
       tx_hash: purchase.txHash,
-      created_at: purchase.createdAt
+      created_at: purchase.createdAt,
+      notes
     });
   } catch (e) {
     log.error({ err: e }, "buy_status failed");
@@ -615,14 +659,13 @@ app.post("/coin_status", async (req, res) => {
     const notes = launch.status === "completed" ? "Launch completed. The token is now available for purchase." : "Launch is still in progress. Please check back later.";
 
     res.json({
-      reference,
       status: launch.status,
       name: launch.name,
       symbol: launch.symbol,
       size: launch.size,
       creator: launch.creator,
       token: launch.tokenLower,
-      onchain_id: launch.onchainId,
+      onchain_id: launch.onchainId?.toString(),
       tx_hash: launch.txHash,
       error: launch.error,
       created_at: launch.createdAt,

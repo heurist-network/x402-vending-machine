@@ -3,32 +3,31 @@ import { argString, createPaymentFetch, decodePaymentResponse, getAccountFromEnv
 async function main() {
   const args = parseArgs();
   const account = getAccountFromEnv(process.env.STATUS_PRIVATE_KEY_ENV || "PRIVATE_KEY");
-  log.info({ address: account.address }, "Using status wallet");
+  log.info({ address: account.address }, "Using wallet");
 
   const fetchWithPayment = createPaymentFetch(account);
   const baseUrl = getApiBaseUrl(argString(args, "api"));
-  const reference = argString(args, "reference") || process.env.BUY_REFERENCE || requireEnv("BUY_REFERENCE");
+  const token = argString(args, "token") || process.env.TOKEN_ADDRESS || requireEnv("TOKEN_ADDRESS");
 
-  log.info({ reference }, "Checking /buy_status");
+  log.info({ token }, "Calling /token_info");
 
-  const response = await fetchWithPayment(`${baseUrl}/buy_status`, {
+  const response = await fetchWithPayment(`${baseUrl}/token_info`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reference })
+    body: JSON.stringify({ token })
   });
 
   const payload = await safeJson(response);
-  const payment = decodePaymentResponse(response);
 
   if (!response.ok) {
-    log.error({ status: response.status, payload }, "buy_status request failed");
+    log.error({ status: response.status, payload }, "token_info request failed");
     process.exit(1);
   }
 
-  log.info(`result: ${JSON.stringify(payload)}`);
+  log.info(`result: ${JSON.stringify(payload, null, 2)}`);
 }
 
 main().catch((err) => {
-  log.error({ err }, "buy-status script error");
+  log.error({ err }, "token-info script error");
   process.exit(1);
 });

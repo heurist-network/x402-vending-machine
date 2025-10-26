@@ -1,7 +1,8 @@
 import { argBoolean, argString, createPaymentFetch, decodePaymentResponse, getAccountFromEnv, getApiBaseUrl, log, parseArgs, requireEnv, safeJson } from "./script-utils";
 
-function resolveRoute(opts: { amount?: string; route?: string; test?: boolean }) {
+function resolveRoute(opts: { amount?: string; route?: string; test?: boolean, half?: boolean }) {
   if (opts.test) return "buyTest";
+  if (opts.half) return "buyHalf";
   if (opts.route) return opts.route;
   if (!opts.amount) return "buy";
   const normalized = opts.amount.toLowerCase();
@@ -24,7 +25,8 @@ async function main() {
   const route = resolveRoute({
     amount: argString(args, "amount") || process.env.BUY_AMOUNT,
     route: argString(args, "route") || process.env.BUY_ROUTE,
-    test: argBoolean(args, "test")
+    test: argBoolean(args, "test"),
+    half: argBoolean(args, "half")
   });
 
   const endpoint = `${baseUrl}/${route}`;
