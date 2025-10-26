@@ -28,7 +28,10 @@ app.use(
         },
       },
     },
-    facilitator,
+    // facilitator
+    {
+      url: 'https://facilitator.x402.rs',
+    }
   ),
 );
 

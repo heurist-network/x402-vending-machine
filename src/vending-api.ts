@@ -1,4 +1,5 @@
 import express from "express";
+import { facilitator } from "@coinbase/x402";
 import cors from "cors";
 import pino from "pino";
 import { paymentMiddleware } from "x402-express";
@@ -186,6 +187,10 @@ app.use(paymentMiddleware(
         }
       }
     }
+  },
+  // use 'facilitator' for coinbase facilitator
+  {
+    url: 'https://facilitator.x402.rs',
   }
 ));
 
@@ -271,7 +276,9 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
     });
   } catch (e) {
     log.error({ err: e }, "handleBuy failed");
-    res.status(500).json({ error: "server_error" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "server_error" });
+    }
   }
 }
 
@@ -284,61 +291,68 @@ app.post("/buy10x", async (req, res) => {
 });
 
 app.post("/coin", async (req, res) => {
-  const { name, symbol, size } = req.body || {};
-  if (!name || !symbol || !["TEST", "S", "L"].includes(size)) {
-    return res.status(400).json({ error: "bad_request" });
-  }
-
-  const xp = req.get("x-payment");
-  if (!xp) return res.status(400).json({ error: "missing_x_payment_header" });
-  const { payer, nonce } = parseXPayment(xp);
-  if (!payer || !nonce) return res.status(400).json({ error: "bad_payment_payload" });
-
-  let creator = req.body?.creator;
-  if (!creator) {
-    creator = payer;
-  }
-
-  creator = toLowerAddr(creator);
-
-  const tempKey = `temp/${Date.now()}-${symbol}.json`;
-  const metadataPayload = {
-    name, symbol,
-    description: req.body?.description ?? `${name} fair launch via x402 Vending Machine.`,
-    creator: creator,
-    image: req.body?.imageUrl || null,
-    website: req.body?.website || null,
-    docs: req.body?.docs || null,
-    links: {
-      twitter: req.body?.twitter || null,
-      telegram: req.body?.telegram || null,
-      discord: req.body?.discord || null
+  try {
+    const { name, symbol, size } = req.body || {};
+    if (!name || !symbol || !["TEST", "S", "L"].includes(size)) {
+      return res.status(400).json({ error: "bad_request" });
     }
-  };
-  const metadataUri = await uploadMetadataJson(tempKey, metadataPayload);
 
-  const launch = await prisma.launch.create({
-    data: {
+    const xp = req.get("x-payment");
+    if (!xp) return res.status(400).json({ error: "missing_x_payment_header" });
+    const { payer, nonce } = parseXPayment(xp);
+    if (!payer || !nonce) return res.status(400).json({ error: "bad_payment_payload" });
+
+    let creator = req.body?.creator;
+    if (!creator) {
+      creator = payer;
+    }
+
+    creator = toLowerAddr(creator);
+
+    const tempKey = `temp/${Date.now()}-${symbol}.json`;
+    const metadataPayload = {
+      name, symbol,
+      description: req.body?.description ?? `${name} fair launch via x402 Vending Machine.`,
+      creator: creator,
+      image: req.body?.imageUrl || null,
+      website: req.body?.website || null,
+      docs: req.body?.docs || null,
+      links: {
+        twitter: req.body?.twitter || null,
+        telegram: req.body?.telegram || null,
+        discord: req.body?.discord || null
+      }
+    };
+    const metadataUri = await uploadMetadataJson(tempKey, metadataPayload);
+
+    const launch = await prisma.launch.create({
+      data: {
+        name,
+        symbol,
+        size,
+        creator,
+        x402Nonce: nonce,
+        metadataUri,
+        status: "queued"
+      }
+    });
+
+    await enqueueJob("COIN", `coin:${nonce}`, {
+      launchId: launch.id,
       name,
       symbol,
       size,
       creator,
-      x402Nonce: nonce,
-      metadataUri,
-      status: "queued"
+      initialURI: metadataUri
+    }, undefined, 3);
+
+    res.json({ ok: true, reference: launch.id, metadataUri });
+  } catch (e) {
+    log.error({ err: e }, "/coin failed");
+    if (!res.headersSent) {
+      res.status(500).json({ error: "server_error" });
     }
-  });
-
-  await enqueueJob("COIN", `coin:${nonce}`, {
-    launchId: launch.id,
-    name,
-    symbol,
-    size,
-    creator,
-    initialURI: metadataUri
-  }, undefined, 10);
-
-  res.json({ ok: true, reference: launch.id, metadataUri });
+  }
 });
 
 app.post("/metadata/update", async (req, res) => {
@@ -388,60 +402,69 @@ app.post("/metadata/update", async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     log.error({ err: e }, "metadata update failed");
-    res.status(500).json({ error: "server_error" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "server_error" });
+    }
   }
 });
 
 app.post("/launches", async (req, res) => {
-  const filter = String(req.body?.filter || "").toLowerCase();
-  const now14 = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  try {
+    const filter = String(req.body?.filter || "").toLowerCase();
+    const now14 = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
 
-  let where = {};
-  if (filter === "open") {
-    where = { graduated: false, createdAt: { gte: now14 } };
-  } else if (filter === "graduated") {
-    where = { graduated: true };
-  } else if (filter === "refundable") {
-    where = { graduated: false, createdAt: { lt: now14 } };
-  }
-
-  const launches = await prisma.launch.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    take: 200,
-    select: {
-      tokenLower: true,
-      onchainId: true,
-      name: true,
-      symbol: true,
-      size: true,
-      creator: true,
-      contractUri: true,
-      graduated: true,
-      createdAt: true,
-      usdcAccounted6d: true,
-      targetUsdc6d: true,
-      usdcQueued6d: true
+    let where = {};
+    if (filter === "open") {
+      where = { graduated: false, createdAt: { gte: now14 } };
+    } else if (filter === "graduated") {
+      where = { graduated: true };
+    } else if (filter === "refundable") {
+      where = { graduated: false, createdAt: { lt: now14 } };
     }
-  });
 
-  res.json({
-    data: launches.map(l => ({
-      token: l.tokenLower,
-      onchainId: l.onchainId,
-      name: l.name,
-      symbol: l.symbol,
-      size: l.size,
-      creator: l.creator,
-      contractUri: l.contractUri,
-      graduated: l.graduated,
-      createdAt: l.createdAt,
-      usdc_accounted: formatUnits(l.usdcAccounted6d, 6),
-      target_usdc: formatUnits(l.targetUsdc6d, 6),
-      usdc_queued: formatUnits(l.usdcQueued6d, 6)
-    })),
-    notes: "The data is cached and might not be up-to-date. Call the token_info API to get fresh information for a specific token."
-  });
+    const launches = await prisma.launch.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      select: {
+        tokenLower: true,
+        onchainId: true,
+        name: true,
+        symbol: true,
+        size: true,
+        creator: true,
+        contractUri: true,
+        graduated: true,
+        createdAt: true,
+        usdcAccounted6d: true,
+        targetUsdc6d: true,
+        usdcQueued6d: true
+      }
+    });
+
+    res.json({
+      data: launches.map(l => ({
+        token: l.tokenLower,
+        onchainId: l.onchainId,
+        name: l.name,
+        symbol: l.symbol,
+        size: l.size,
+        creator: l.creator,
+        contractUri: l.contractUri,
+        graduated: l.graduated,
+        createdAt: l.createdAt,
+        usdc_accounted: formatUnits(l.usdcAccounted6d, 6),
+        target_usdc: formatUnits(l.targetUsdc6d, 6),
+        usdc_queued: formatUnits(l.usdcQueued6d, 6)
+      })),
+      notes: "The data is cached and might not be up-to-date. Call the token_info API to get fresh information for a specific token."
+    });
+  } catch (e) {
+    log.error({ err: e }, "/launches failed");
+    if (!res.headersSent) {
+      res.status(500).json({ error: "server_error" });
+    }
+  }
 });
 
 app.post("/token_info", async (req, res) => {
@@ -552,7 +575,9 @@ app.post("/buy_status", async (req, res) => {
     });
   } catch (e) {
     log.error({ err: e }, "buy_status failed");
-    res.status(500).json({ error: "server_error" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "server_error" });
+    }
   }
 });
 
@@ -581,6 +606,8 @@ app.post("/coin_status", async (req, res) => {
       return res.status(404).json({ error: "launch_not_found" });
     }
 
+    const notes = launch.status === "completed" ? "Launch completed. The token is now available for purchase." : "Launch is still in progress. Please check back later.";
+
     res.json({
       reference,
       status: launch.status,
@@ -592,11 +619,14 @@ app.post("/coin_status", async (req, res) => {
       onchain_id: launch.onchainId,
       tx_hash: launch.txHash,
       error: launch.error,
-      created_at: launch.createdAt
+      created_at: launch.createdAt,
+      notes
     });
   } catch (e) {
     log.error({ err: e }, "coin_status failed");
-    res.status(500).json({ error: "server_error" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "server_error" });
+    }
   }
 });
 
