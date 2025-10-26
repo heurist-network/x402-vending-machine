@@ -1,5 +1,6 @@
 import pino from "pino";
 import type { Logger } from "pino";
+import { ethers } from "ethers";
 import { prisma } from "./db";
 import { enqueueJob } from "./queue";
 import { initContracts, pickOperator, readLaunch } from "./web3";
@@ -56,17 +57,20 @@ async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContr
     select: {
       status: true,
       tokenLower: true,
-      onchainId: true
+      onchainId: true,
+      txHash: true
     }
   });
   if (!launch) throw new Error("launch_not_found");
 
-  if (launch.status === "active" && launch.tokenLower && launch.onchainId) {
+  const prevStatus = launch.status;
+
+  if (prevStatus === "active" && launch.tokenLower) {
     log.info({ launchId, token: launch.tokenLower }, "Skipping handleCOIN - already active");
     return;
   }
 
-  if (launch.status !== "processing") {
+  if (prevStatus !== "processing") {
     await prisma.launch.update({
       where: { id: launchId },
       data: { status: "processing" }
@@ -74,19 +78,34 @@ async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContr
   }
 
   const iface = web3.vm.interface;
-  let txHash: string | undefined = job.payload.txHash;
+  let txHash: string | undefined = job.payload.txHash || launch.txHash || undefined;
   let receipt: any;
 
-  // idempotency check: if the txHash is provided, we wait for the receipt. avoid calling the contract again.
-  if (txHash) {
-    receipt = await waitForReceipt(web3.provider, txHash);
-  } else {
+  // idempotency check: we must avoid calling the contract multiple times
+  if (prevStatus == "processing") {
+    if (txHash) {
+      receipt = await waitForReceipt(web3.provider, txHash);
+      if (receipt.status !== 1) throw new Error("coin_tx_failed for launch ID ${launchId} with tx hash ${txHash}");
+    }
+    else {
+      throw new Error("tx_hash_missing for launch ID ${launchId}");
+    }
+  }
+  else {
     const vm = pickOperator(web3.vm, web3.operators);
     const tx = await vm.coin(name, symbol, metadataUri, creator, sizeToIndex(size));
     txHash = tx.hash;
+
+    // once we get the tx hash (tx not yet confirmed), we update the hash in the database
+    await prisma.launch.update({
+      where: { id: launchId },
+      data: { txHash }
+    });
     await updateJobPayload(job, { txHash });
+
+    // wait for the tx to be confirmed - failures here are possible
     receipt = await tx.wait();
-    if (receipt.status !== 1) throw new Error("coin_tx_failed");
+    if (receipt.status !== 1) throw new Error("coin_tx_failed for launch ID ${launchId} with tx hash ${txHash}");
 
     // TODO: verify the contract on basescan
   }
@@ -100,7 +119,7 @@ async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContr
       }
     })
     .find((entry: any) => entry && entry.name === "Coined");
-  if (!parsed) throw new Error("Coined event not found");
+  if (!parsed) throw new Error("Coined event not found for launch ID ${launchId} with tx hash ${txHash}");
 
   const onchainId = Number(parsed.args.id);
   const token = (parsed.args.token as string).toLowerCase();
@@ -141,12 +160,14 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
   });
   if (!purchase) throw new Error("purchase_not_found");
 
-  if (purchase.status === "completed" || purchase.status === "refunded") {
-    log.info({ tokenLower, purchaseId, status: purchase.status }, "Skipping handlePURCHASE - already finalized");
+  const prevStatus = purchase.status;
+
+  if (prevStatus === "completed" || prevStatus === "refunded") {
+    log.info({ tokenLower, purchaseId, status: prevStatus }, "Skipping handlePURCHASE - already finalized");
     return;
   }
 
-  if (purchase.status === "to_refund") {
+  if (prevStatus === "to_refund") {
     log.info({ tokenLower, purchaseId }, "Skipping handlePURCHASE - marked for refund");
     return;
   }
@@ -154,7 +175,7 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
   if (!purchase.onchainId) throw new Error("purchase_missing_onchain_id");
   const onchainId = Number(purchase.onchainId);
 
-  if (purchase.status !== "processing") {
+  if (prevStatus !== "processing") {
     await prisma.purchase.update({
       where: { id: purchaseId },
       data: { status: "processing" }
@@ -163,39 +184,23 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
 
   let txHash: string | undefined = job.payload.txHash || purchase.txHash || undefined;
   let operatorAddr: string | undefined = job.payload.operator || purchase.operator || undefined;
+  let receipt: any;
 
   const usdcAmountBigInt = purchase.usdcAmount6d;
   const usdcAmountString = purchase.usdcAmount6d.toString();
 
-  if (!txHash) {
-    const launch = await prisma.launch.findUnique({
-      where: { tokenLower },
-      select: { onchainId: true }
-    });
-    if (!launch || !launch.onchainId) throw new Error("unknown_token");
-
-    const L = await readLaunch(web3.vm, onchainId);
-
-    if (L.graduated) {
-      log.warn({ tokenLower, recipient, purchaseId }, "Purchase failed: launch already graduated, enqueueing refund");
-      await prisma.$transaction([
-        prisma.purchase.update({
-          where: { id: purchaseId },
-          data: { status: "to_refund" }
-        }),
-        prisma.launch.update({
-          where: { tokenLower },
-          data: { usdcQueued6d: { decrement: usdcAmountBigInt } }
-        })
-      ]);
-      await enqueueJob("REFUND", `refund:${purchaseId}`, {
-        purchaseId,
-        tokenLower,
-        payer: purchase.payer,
-        usdcAmount6d: usdcAmountString
-      }, undefined, 3);
-      return;
+  // idempotency check: we must avoid calling the contract multiple times
+  if (prevStatus == "processing") {
+    if (txHash) {
+      receipt = await waitForReceipt(web3.provider, txHash);
+      if (receipt.status !== 1) throw new Error("purchase_tx_failed for purchase ID ${purchaseId} with tx hash ${txHash}");
     }
+    else {
+      throw new Error("tx_hash_missing for purchase ID ${purchaseId}");
+    }
+  }
+  else {
+    const L = await readLaunch(web3.vm, onchainId);
 
     const FAIR_CAP = 900_000_000n * 10n ** 18n;
     const remainingAllocation = FAIR_CAP - L.allocated;
@@ -203,8 +208,22 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
       L.size === 0 ? 200_000_000n * 10n ** 12n : L.size === 1 ? 200_000n * 10n ** 12n : 20_000n * 10n ** 12n;
     const tokensRequested = usdcAmountBigInt * TOKENS_PER_USDC_6D;
 
-    if (tokensRequested > remainingAllocation) {
-      log.warn({ tokenLower, recipient, purchaseId, remainingAllocation: remainingAllocation.toString() }, "Purchase failed: insufficient allocation, enqueueing refund");
+    const needsRefund = L.graduated || remainingAllocation < tokensRequested;
+
+    if (needsRefund) {
+      if (L.graduated) {
+        log.warn({ tokenLower, recipient, purchaseId }, "Purchase failed: launch already graduated, enqueueing refund");
+      }
+      else {
+        log.warn({ 
+          tokenLower, 
+          recipient, 
+          purchaseId, 
+          remainingAllocation: (remainingAllocation / 10n ** 18n).toString(),
+          tokensRequested: (tokensRequested / 10n ** 18n).toString()
+        }, "Purchase failed: insufficient allocation, enqueueing refund");
+      }
+      
       await prisma.$transaction([
         prisma.purchase.update({
           where: { id: purchaseId },
@@ -227,12 +246,17 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
     const vm = pickOperator(web3.vm, web3.operators);
     const tx = await vm.handlePurchase(onchainId, purchase.recipient, usdcAmountString);
     txHash = tx.hash;
-    operatorAddr = vm.runner?.address ?? "operator";
+    operatorAddr = (vm.runner as ethers.Wallet).address;
+    await prisma.purchase.update({
+      where: { id: purchaseId },
+      data: {
+        txHash,
+        operator: operatorAddr
+      }
+    });
     await updateJobPayload(job, { txHash, operator: operatorAddr });
     const receipt = await tx.wait();
-    if (receipt.status !== 1) throw new Error("purchase_tx_failed");
-  } else {
-    await waitForReceipt(web3.provider, txHash);
+    if (receipt.status !== 1) throw new Error("purchase_tx_failed for purchase ID ${purchaseId} with tx hash ${txHash}");
   }
 
   const updatedL = await readLaunch(web3.vm, onchainId);
@@ -242,8 +266,6 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
       where: { id: purchaseId },
       data: {
         status: "completed",
-        ...(operatorAddr ? { operator: operatorAddr } : {}),
-        ...(txHash ? { txHash } : {})
       }
     }),
     prisma.launch.update({
@@ -266,13 +288,15 @@ async function handleGRADUATE(log: Logger, web3: Awaited<ReturnType<typeof initC
   const { tokenLower } = job.payload;
   const launch = await prisma.launch.findUnique({
     where: { tokenLower },
-    select: { onchainId: true, status: true, graduated: true }
+    select: { onchainId: true, status: true, graduated: true, txHash: true }
   });
   if (!launch || !launch.onchainId) throw new Error("unknown_token");
   const onchainId = Number(launch.onchainId);
 
-  if (launch.graduated) {
-    if (launch.status !== "active") {
+  // check onchain launch status
+  const launchData = await readLaunch(web3.vm, onchainId);
+  if (launchData.graduated) {
+    if (launch.status !== "active" || !launch.graduated) {
       await prisma.launch.update({
         where: { tokenLower },
         data: { status: "active", graduated: true }
@@ -282,23 +306,39 @@ async function handleGRADUATE(log: Logger, web3: Awaited<ReturnType<typeof initC
     return;
   }
 
-  if (launch.status !== "processing") {
+  const prevStatus = launch.status;
+  if (prevStatus !== "processing") {
     await prisma.launch.update({
       where: { tokenLower },
       data: { status: "processing" }
     });
   }
 
-  const txHash: string | undefined = job.payload.txHash;
+  let txHash: string | undefined = job.payload.txHash || launch.txHash || undefined;
+  let receipt: any;
 
-  if (txHash) {
-    await waitForReceipt(web3.provider, txHash);
-  } else {
+  if (prevStatus == "processing") {
+    if (txHash) {
+      receipt = await waitForReceipt(web3.provider, txHash);
+      if (receipt.status !== 1) throw new Error("graduate_tx_failed for launch ID ${launchId} with tx hash ${txHash}");
+    }
+    else {
+      throw new Error("tx_hash_missing for launch ID ${launchId}");
+    }
+  }
+  else {
     const vm = pickOperator(web3.vm, web3.operators);
     const tx = await vm.graduate(onchainId);
-    await updateJobPayload(job, { txHash: tx.hash });
+    txHash = tx.hash;
+
+    await prisma.launch.update({
+      where: { tokenLower },
+      data: { txHash }
+    });
+    await updateJobPayload(job, { txHash });
+
     const receipt = await tx.wait();
-    if (receipt.status !== 1) throw new Error("graduate_tx_failed");
+    if (receipt.status !== 1) throw new Error("graduate_tx_failed for launch ID ${launchId} with tx hash ${txHash}");
   }
 
   const updatedL = await readLaunch(web3.vm, onchainId);
@@ -315,6 +355,7 @@ async function handleGRADUATE(log: Logger, web3: Awaited<ReturnType<typeof initC
   log.info({ tokenLower, onchainId }, "GRADUATE done");
 }
 
+// we won't call handleREFUND in parallel. the logic is simpler than the other handlers
 async function handleREFUND(log: Logger, web3: Awaited<ReturnType<typeof initContracts>>, job: any) {
   const { purchaseId, tokenLower } = job.payload;
   if (!purchaseId) throw new Error("refund_purchase_id_missing");
@@ -331,52 +372,28 @@ async function handleREFUND(log: Logger, web3: Awaited<ReturnType<typeof initCon
   });
   if (!purchase) throw new Error("purchase_not_found");
 
-  if (purchase.status === "refunded") {
-    log.info({ purchaseId }, "Skipping refund - already refunded");
+  if (purchase.status !== "to_refund") {
+    log.info({ purchaseId }, `Skipping refund - incorrect status: ${purchase.status}`);
     return;
   }
 
+  if (!purchase.txHash) throw new Error("refund_missing_tx_hash");
   if (!purchase.onchainId) throw new Error("refund_missing_onchain_id");
-  const onchainId = Number(purchase.onchainId);
 
-  if (purchase.status !== "processing") {
-    await prisma.purchase.update({
-      where: { id: purchaseId },
-      data: { status: "processing" }
-    });
-  }
+  const vm = web3.vm.connect(web3.admin);
+  const tx = await vm.adminRefund(purchase.payer, purchase.usdcAmount6d);
+  const txHash = tx.hash;
+  await prisma.purchase.update({
+    where: { id: purchaseId },
+    data: { refundTxHash: txHash }
+  });
+  const receipt = await tx.wait();
+  if (receipt.status !== 1) throw new Error(`refund_tx_failed for purchase ID ${purchaseId} with tx hash ${txHash}`);
 
-  const usdcAmount = purchase.usdcAmount6d;
-  let txHash: string | undefined = job.payload.txHash || purchase.txHash || undefined;
-
-  if (!txHash) {
-    const vm = pickOperator(web3.vm, web3.operators);
-    const tx = await vm.refund(onchainId, purchase.payer);
-    txHash = tx.hash;
-    await updateJobPayload(job, { txHash });
-    const receipt = await tx.wait();
-    if (receipt.status !== 1) throw new Error("refund_tx_failed");
-  } else {
-    await waitForReceipt(web3.provider, txHash);
-  }
-
-  const updatedL = await readLaunch(web3.vm, onchainId);
-
-  await prisma.$transaction([
-    prisma.purchase.update({
-      where: { id: purchaseId },
-      data: {
-        status: "refunded",
-        ...(txHash ? { txHash } : {})
-      }
-    }),
-    prisma.launch.update({
-      where: { tokenLower },
-      data: {
-        usdcAccounted6d: updatedL.usdcAccounted
-      }
-    })
-  ]);
+  await prisma.purchase.update({
+    where: { id: purchaseId },
+    data: { status: "refunded" }
+  });
 
   log.info({ purchaseId }, "REFUND done");
 }

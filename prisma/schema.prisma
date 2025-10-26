@@ -38,6 +38,7 @@ model Purchase {
   usdcAmount6d  BigInt   @map("usdc_amount_6d")
   x402Nonce     String   @unique @map("x402_nonce")
   txHash        String?  @map("tx_hash")
+  refundTxHash  String?  @map("refund_tx_hash")
   status        String   @default("queued")
   operator      String?
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz

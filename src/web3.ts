@@ -10,6 +10,7 @@ const VM_ABI = [
   "function handlePurchase(uint256 id,address buyer,uint256 usdcAmount) external",
   "function graduate(uint256 id) external",
   "function refund(uint256 id,address buyer) external",
+  "function adminRefund(address to, uint256 usdcAmount) external",
   // events
   "event Coined(uint256 indexed id, address token, uint8 size, address creator, string contractURI)",
   "event PurchaseRecorded(uint256 indexed id, address buyer, uint256 usdcAmount, uint256 tokensAllocated)",
@@ -37,7 +38,8 @@ export async function initContracts() {
   const keys = (process.env.OPERATOR_KEYS || "").split(",").map(s => s.trim()).filter(Boolean);
   if (!keys.length) throw new Error("OPERATOR_KEYS missing");
   const operators = keys.map(k => new ethers.Wallet(k, provider));
-  return { provider, vm, operators };
+  const admin = new ethers.Wallet(process.env.ADMIN_KEY!, provider);
+  return { provider, vm, operators, admin };
 }
 
 export async function readVault(vm: ethers.Contract) {
