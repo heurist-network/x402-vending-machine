@@ -29,7 +29,7 @@ export async function claimJob(workerId: string) {
   return await prisma.$transaction(async (tx) => {
     const jobs = await tx.$queryRaw<Job[]>`
       SELECT * FROM "jobs"
-      WHERE status = 'queued' AND run_after <= NOW()
+      WHERE status = 'queued' AND run_after <= NOW() AND kind != 'REFUND'
       ORDER BY id ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED

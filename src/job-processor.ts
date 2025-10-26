@@ -406,7 +406,10 @@ export async function buildJobProcessor(logger: Logger = defaultLog): Promise<Jo
       if (job.kind === "COIN") return handleCOIN(logger, web3, job);
       if (job.kind === "PURCHASE") return handlePURCHASE(logger, web3, job);
       if (job.kind === "GRADUATE") return handleGRADUATE(logger, web3, job);
-      if (job.kind === "REFUND") return handleREFUND(logger, web3, job);
+      if (job.kind === "REFUND") {
+        logger.warn("REFUND job received - this should not happen");
+        return;
+      }
       logger.warn({ kind: job.kind }, "Unknown job kind");
     }
   };

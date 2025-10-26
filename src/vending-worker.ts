@@ -4,21 +4,24 @@ import pino from "pino";
 import { buildJobProcessor } from "./job-processor";
 
 const log = pino({ level: process.env.LOG_LEVEL || "info" });
-const WORKER_ID = `vm-worker-${process.pid}`;
+const PROCESS_ID = `vm-process-${process.pid}`;
 
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY || "2");
 const IDLE_DELAY_MS = Number(process.env.WORKER_IDLE_DELAY_MS || "500");
 const JOB_LEASE_MS = Number(process.env.JOB_LEASE_MS || "300000");
 const WATCHDOG_INTERVAL_MS = Number(process.env.WATCHDOG_INTERVAL_MS || "60000");
 
+log.info({ PROCESS_ID, CONCURRENCY, IDLE_DELAY_MS, JOB_LEASE_MS, WATCHDOG_INTERVAL_MS }, "Worker started");
+
 const processorPromise = buildJobProcessor(log);
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-async function processNextJob() {
+async function processNextJob(slot: number) {
   const processor = await processorPromise;
-  const job = await claimJob(WORKER_ID);
+  const workerId = `${PROCESS_ID}-slot${slot}`;
+  const job = await claimJob(workerId);
   if (!job) {
     await sleep(IDLE_DELAY_MS);
     return;
@@ -45,7 +48,7 @@ async function processNextJob() {
 async function workerLoop(slot: number) {
   log.info({ slot, concurrency: CONCURRENCY }, "Worker slot started");
   while (true) {
-    await processNextJob();
+    await processNextJob(slot);
   }
 }
 
