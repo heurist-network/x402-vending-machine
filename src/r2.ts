@@ -38,6 +38,6 @@ export async function getMetadataJson(key: string): Promise<any> {
   return data;
 }
 
-export function tokenMetadataKey(tokenLower: string) {
-  return `tokens/${tokenLower}.json`;
+export function launchMetadataKey(launchId: string) {
+  return `tokens/${launchId}.json`;
 }

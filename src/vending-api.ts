@@ -4,9 +4,10 @@ import cors from "cors";
 import pino from "pino";
 import { paymentMiddleware } from "x402-express";
 import { formatUnits } from "ethers";
+import { randomUUID } from "crypto";
 import { prisma } from "./db";
 import { enqueueJob } from "./queue";
-import { tokenMetadataKey, uploadMetadataJson, getMetadataJson } from "./r2";
+import { launchMetadataKey, uploadMetadataJson, getMetadataJson } from "./r2";
 import { parseXPayment, toLowerAddr } from "./xpay";
 import { initContracts, readLaunch } from "./web3";
 
@@ -309,7 +310,7 @@ app.post("/coin", async (req, res) => {
 
     creator = toLowerAddr(creator);
 
-    const tempKey = `temp/${Date.now()}-${symbol}.json`;
+    const launchId = randomUUID();
     const metadataPayload = {
       name, symbol,
       description: req.body?.description ?? `${name} fair launch via x402 Vending Machine.`,
@@ -323,16 +324,19 @@ app.post("/coin", async (req, res) => {
         discord: req.body?.discord || null
       }
     };
-    const metadataUri = await uploadMetadataJson(tempKey, metadataPayload);
+
+    const metadataKey = launchMetadataKey(launchId);
+    const metadataUri = await uploadMetadataJson(metadataKey, metadataPayload);
 
     const launch = await prisma.launch.create({
       data: {
+        id: launchId,
         name,
         symbol,
         size,
         creator,
         x402Nonce: nonce,
-        metadataUri,
+        contractUri: metadataUri,
         status: "queued"
       }
     });
@@ -343,10 +347,10 @@ app.post("/coin", async (req, res) => {
       symbol,
       size,
       creator,
-      initialURI: metadataUri
+      metadataUri
     }, undefined, 3);
 
-    res.json({ ok: true, reference: launch.id, metadataUri });
+    res.json({ ok: true, reference: launch.id, metadataUri, notes: "The token will be created shortly. You can call /coin_status to check the status." });
   } catch (e) {
     log.error({ err: e }, "/coin failed");
     if (!res.headersSent) {
@@ -357,7 +361,8 @@ app.post("/coin", async (req, res) => {
 
 app.post("/metadata/update", async (req, res) => {
   try {
-    const tokenLower = toLowerAddr(req.body?.token);
+    const launchId = String(req.body?.launchId || req.body?.launch || "").trim();
+    if (!launchId) return res.status(400).json({ error: "missing_launch_id" });
 
     const xp = req.get("x-payment");
     if (!xp) return res.status(400).json({ error: "missing_x_payment_header" });
@@ -365,21 +370,16 @@ app.post("/metadata/update", async (req, res) => {
     if (!payer) return res.status(400).json({ error: "bad_payment_payload" });
 
     const launch = await prisma.launch.findUnique({
-      where: { tokenLower },
-      select: { creator: true, contractUri: true, name: true, symbol: true }
+      where: { id: launchId },
+      select: { creator: true, name: true, symbol: true }
     });
-    if (!launch) return res.status(404).json({ error: "token_not_found" });
+    if (!launch) return res.status(404).json({ error: "launch_not_found" });
     if (launch.creator.toLowerCase() !== payer.toLowerCase()) {
       return res.status(403).json({ error: "not_creator" });
     }
 
-    const key = tokenMetadataKey(tokenLower);
-    let existing: any;
-    try {
-      existing = await getMetadataJson(key);
-    } catch {
-      return res.status(404).json({ error: "metadata_not_found" });
-    }
+    const key = launchMetadataKey(launchId);
+    const existing = await getMetadataJson(key);
 
     const merged: any = {
       name: launch.name,
@@ -397,9 +397,14 @@ app.post("/metadata/update", async (req, res) => {
     if (req.body?.telegram !== undefined) merged.links.telegram = req.body.telegram;
     if (req.body?.discord !== undefined) merged.links.discord = req.body.discord;
 
-    await uploadMetadataJson(key, merged);
+    const metadataUri = await uploadMetadataJson(key, merged);
 
-    res.json({ ok: true });
+    await prisma.launch.update({
+      where: { id: launchId },
+      data: { contractUri: metadataUri }
+    });
+
+    res.json({ ok: true, metadataUri });
   } catch (e) {
     log.error({ err: e }, "metadata update failed");
     if (!res.headersSent) {
@@ -477,6 +482,7 @@ app.post("/token_info", async (req, res) => {
     const launch = await prisma.launch.findUnique({
       where: { tokenLower },
       select: {
+        id: true,
         tokenLower: true,
         onchainId: true,
         name: true,
@@ -510,7 +516,7 @@ app.post("/token_info", async (req, res) => {
 
     let metadata = null;
     try {
-      const key = tokenMetadataKey(tokenLower);
+      const key = launchMetadataKey(launch.id);
       metadata = await getMetadataJson(key);
     } catch {
       metadata = "Metadata not found";

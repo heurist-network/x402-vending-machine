@@ -3,7 +3,6 @@ import type { Logger } from "pino";
 import { prisma } from "./db";
 import { enqueueJob } from "./queue";
 import { initContracts, pickOperator, readLaunch } from "./web3";
-import { tokenMetadataKey, uploadMetadataJson, getMetadataJson } from "./r2";
 
 const defaultLog = pino({ level: process.env.LOG_LEVEL || "info" });
 
@@ -49,7 +48,7 @@ function sizeToIndex(size: string): number {
 }
 
 async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContracts>>, job: any) {
-  const { launchId, name, symbol, initialURI, creator, size } = job.payload;
+  const { launchId, name, symbol, metadataUri, creator, size } = job.payload;
   if (!launchId) throw new Error("launch_id_missing");
 
   const launch = await prisma.launch.findUnique({
@@ -83,7 +82,7 @@ async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContr
     receipt = await waitForReceipt(web3.provider, txHash);
   } else {
     const vm = pickOperator(web3.vm, web3.operators);
-    const tx = await vm.coin(name, symbol, initialURI, creator, sizeToIndex(size));
+    const tx = await vm.coin(name, symbol, metadataUri, creator, sizeToIndex(size));
     txHash = tx.hash;
     await updateJobPayload(job, { txHash });
     receipt = await tx.wait();
@@ -105,12 +104,6 @@ async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContr
   const token = (parsed.args.token as string).toLowerCase();
   const launchData = await readLaunch(web3.vm, onchainId);
 
-  // rename the temp file to the token address and upload to R2
-  const tempKey = initialURI.split("/").pop()!;
-  const metadata = await getMetadataJson(tempKey);
-  const finalKey = tokenMetadataKey(token);
-  const finalUri = await uploadMetadataJson(finalKey, metadata);
-
   await prisma.launch.update({
     where: { id: launchId },
     data: {
@@ -118,7 +111,7 @@ async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContr
       tokenLower: token,
       onchainId,
       txHash,
-      contractUri: finalUri,
+      contractUri: metadataUri,
       graduated: launchData.graduated,
       targetUsdc6d: launchData.targetUSDC,
       usdcAccounted6d: launchData.usdcAccounted

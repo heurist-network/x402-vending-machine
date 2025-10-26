@@ -16,7 +16,6 @@ model Launch {
   x402Nonce        String    @unique @map("x402_nonce")
   status           String    @default("queued")
   error            String?
-  metadataUri      String?   @map("metadata_uri")
   tokenLower       String?   @unique @map("token_lower")
   onchainId        BigInt?   @unique @map("onchain_id")
   txHash           String?   @map("tx_hash")

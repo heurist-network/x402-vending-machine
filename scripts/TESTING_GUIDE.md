@@ -14,7 +14,7 @@ STATUS_PRIVATE_KEY_ENV=PRIVATE_KEY_STATUS
 ## Launch a TEST coin
 
 ```
-bun run scripts/coin-test.ts --env-file .env.testing --name "Mesh Test" --symbol MESH --size TEST
+bun run scripts/coin-test.ts --env-file .env.testing --name "Test Token" --symbol TEST --size TEST
 ```
 
 Copy the returned `reference` and poll its status:

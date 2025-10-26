@@ -85,7 +85,8 @@ async function loadRelatedEntities(jobs: JobRecord[]) {
         symbol: true,
         status: true,
         size: true,
-        creator: true
+        creator: true,
+        contractUri: true
       }
     });
     for (const launch of launches) {
@@ -110,7 +111,8 @@ async function loadRelatedEntities(jobs: JobRecord[]) {
         symbol: true,
         status: true,
         size: true,
-        creator: true
+        creator: true,
+        contractUri: true
       }
     });
     for (const launch of launches) {
@@ -158,7 +160,8 @@ function buildDetails(
       symbol: payload.symbol,
       size: payload.size,
       creator: payload.creator || launch?.creator,
-      token: launch?.tokenLower || null
+      token: launch?.tokenLower || null,
+      metadataUri: launch?.contractUri || payload.metadataUri || null
     };
   }
 
