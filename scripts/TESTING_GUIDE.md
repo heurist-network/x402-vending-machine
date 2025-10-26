@@ -53,10 +53,10 @@ This pulls up to `max` queued jobs and executes them with the same handler logic
 ## Purge items from a table
 
 To purge a launch:
-bun run scripts/purge.ts --launch <launch-id> --env-file .env.testing
+bun run scripts/purge.ts --env-file .env.testing --launch <launch-id> 
 
 To purge a purchase:
-bun run scripts/purge.ts --purchase <purchase-id> --env-file .env.testing
+bun run scripts/purge.ts --env-file .env.testing --purchase <purchase-id> 
 
 ## Handy flags
 

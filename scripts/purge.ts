@@ -40,6 +40,19 @@ async function purgeLaunch(id: string) {
 
   log.info({ id, name: launch.name, symbol: launch.symbol }, "Purging launch");
 
+  const deletedJobs = await prisma.job.deleteMany({
+    where: {
+      kind: "COIN",
+      payload: {
+        path: ["launchId"],
+        equals: id
+      }
+    }
+  });
+  if (deletedJobs.count > 0) {
+    log.info({ id, jobs: deletedJobs.count }, "Deleted associated COIN jobs");
+  }
+
   await prisma.launch.delete({
     where: { id }
   });
@@ -67,6 +80,30 @@ async function purgePurchase(id: string) {
     tokenLower: purchase.tokenLower,
     payer: purchase.payer
   }, "Purging purchase");
+
+  const deletedJobs = await prisma.job.deleteMany({
+    where: {
+      OR: [
+        {
+          kind: "PURCHASE",
+          payload: {
+            path: ["purchaseId"],
+            equals: id
+          }
+        },
+        {
+          kind: "REFUND",
+          payload: {
+            path: ["purchaseId"],
+            equals: id
+          }
+        }
+      ]
+    }
+  });
+  if (deletedJobs.count > 0) {
+    log.info({ id, jobs: deletedJobs.count }, "Deleted associated jobs");
+  }
 
   await prisma.purchase.delete({
     where: { id }
