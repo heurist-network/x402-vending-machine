@@ -3,9 +3,12 @@ import { facilitator } from "@coinbase/x402";
 import { paymentMiddleware } from "x402-express";
 import { processPriceToAtomicAmount } from "x402/shared";
 import { parseXPayment } from "../src/xpay";
+import pino from "pino";
 
 const app = express();
 app.use(express.json());
+
+const log = pino({ level: process.env.LOG_LEVEL || "info" });
 
 const PAY_TO = '0x7d9d1821d15B9e0b8Ab98A058361233E255E405D'
 
@@ -47,7 +50,7 @@ app.post("/demo", (req, res) => {
   let parsed;
   try {
     parsed = parseXPayment(header);
-    console.log("parsed", parsed);
+    log.info({ parsed }, "Parsed x-payment header");
   } catch (error) {
     return res.status(400).json({ ok: false, error: "invalid_payment_header", details: String(error) });
   }
@@ -80,6 +83,6 @@ app.post("/demo", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Minimal x402 API listening on http://localhost:${PORT}`);
-  console.log(`Expecting ${PRICE} on ${NETWORK} paid to ${PAY_TO}`);
+  log.info({ port: PORT }, "Minimal x402 API listening");
+  log.info({ price: PRICE, network: NETWORK, payTo: PAY_TO }, "x402 payment expectations");
 });

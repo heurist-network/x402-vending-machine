@@ -25,6 +25,7 @@ model Launch {
   graduated        Boolean   @default(false)
   targetUsdc6d     BigInt?   @map("target_usdc_6d")
   usdcAccounted6d  BigInt?   @map("usdc_accounted_6d")
+  usdcQueued6d     BigInt    @default(0) @map("usdc_queued_6d")
 
   @@map("launches")
 }

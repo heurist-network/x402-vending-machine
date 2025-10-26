@@ -88,7 +88,7 @@ This system uses an asynchronous job queue pattern to handle blockchain operatio
    → If false: Update status='to_refund', enqueue REFUND, return
 5. Call blockchain: vm.handlePurchase(onchainId, payer, usdcAmount)
 6. Wait for transaction confirmation
-7. Update purchase status='handled'
+7. Update purchase status='completed'
 8. Read updated onchain state
 9. Update launch counters in DB
 10. Check if usdcAccounted >= targetUSDC
@@ -97,7 +97,7 @@ This system uses an asynchronous job queue pattern to handle blockchain operatio
 ```
 
 **Status Progression**:
-- Success: `queued` → `in_progress` → `handled`
+- Success: `queued` → `in_progress` → `completed`
 - Failed: `queued` → `in_progress` → `to_refund` (then REFUND job)
 
 **Key Point**: Worker does onchain validation BEFORE processing!
@@ -160,7 +160,7 @@ if (!updatedL.graduated && updatedL.usdcAccounted >= updatedL.targetUSDC) {
 |--------|---------|
 | `queued` | Job enqueued, waiting for worker |
 | `in_progress` | Worker processing |
-| `handled` | Successfully processed on-chain |
+| `completed` | Successfully processed on-chain |
 | `to_refund` | Failed validation, refund enqueued |
 | `refunded` | Refund transaction confirmed |
 | `failed` | Job failed, will retry |

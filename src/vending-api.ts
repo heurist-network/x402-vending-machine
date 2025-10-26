@@ -16,7 +16,7 @@ app.use(express.json({ limit: "1mb" }));
 
 const NETWORK = "base";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-const PAY_TO = process.env.PAY_TO_VAULT!;
+const PAY_TO = process.env.PAY_TO_VAULT! as `0x${string}`;
 
 if (!PAY_TO) throw new Error("PAY_TO_VAULT missing");
 
@@ -25,25 +25,31 @@ const web3Promise = initContracts();
 app.use(paymentMiddleware(
   PAY_TO,
   {
+    "POST /buyTest": {
+      price: "$4.50",
+      network: NETWORK,
+      config: {
+        description: "Buy 4.50 USDC. Testing only.",
+        inputSchema: {
+          bodyType: "json",
+          bodyFields: {
+            token: { type: "string", description: "Token address", required: true },
+            recipient: { type: "string", description: "Optional recipient address; default is the API caller" }
+          }
+        }
+      }
+    },
+
     "POST /buy": {
       price: "$1.00",
       network: NETWORK,
       config: {
         description: "Buy 1 USDC worth of tokens from the vending machine. The token launch must be open to buy, and the allocation cap must not have been reached.",
         inputSchema: {
-          type: "object",
-          required: ["token"],
-          properties: {
-            token: { type: "string", description: "Token address" },
+          bodyType: "json",
+          bodyFields: {
+            token: { type: "string", description: "Token address", required: true },
             recipient: { type: "string", description: "Optional recipient address; default is the API caller" }
-          }
-        },
-        outputSchema: {
-          type: "object",
-          properties: {
-            ok: { type: "boolean" },
-            reference: { type: "string" },
-            message: { type: "string" }
           }
         }
       }
@@ -55,19 +61,10 @@ app.use(paymentMiddleware(
       config: {
         description: "Buy 10 USDC worth of tokens from the vending machine. The token launch must be open to buy, and the allocation cap must not have been reached.",
         inputSchema: {
-          type: "object",
-          required: ["token"],
-          properties: {
-            token: { type: "string", description: "Token address" },
+          bodyType: "json",
+          bodyFields: {
+            token: { type: "string", description: "Token address", required: true },
             recipient: { type: "string", description: "Optional recipient address; default is the API caller" }
-          }
-        },
-        outputSchema: {
-          type: "object",
-          properties: {
-            ok: { type: "boolean" },
-            reference: { type: "string" },
-            message: { type: "string" }
           }
         }
       }
@@ -79,13 +76,12 @@ app.use(paymentMiddleware(
       config: {
         description: "Create a coin and offer it for sale.",
         inputSchema: {
-          type: "object",
-          required: ["name","symbol","size"],
-          properties: {
-            name: { type: "string" },
-            symbol: { type: "string" },
+          bodyType: "json",
+          bodyFields: {
+            name: { type: "string", required: true },
+            symbol: { type: "string", required: true },
             creator: { type: "string", description: "The address that can update token metadata. Default is the API caller." },
-            size: { type: "string", enum: ["TEST","S","L"] },
+            size: { type: "string", enum: ["TEST","S","L"], required: true },
             imageUrl: { type: "string" },
             website: { type: "string" },
             docs: { type: "string" },
@@ -104,10 +100,9 @@ app.use(paymentMiddleware(
       config: {
         description: "Update token metadata. You must be the token creator to call this endpoint.",
         inputSchema: {
-          type: "object",
-          required: ["token"],
-          properties: {
-            token: { type: "string", description: "The token contract address, starting with 0x" },
+          bodyType: "json",
+          bodyFields: {
+            token: { type: "string", description: "The token contract address, starting with 0x", required: true },
             imageUrl: { type: "string" },
             website: { type: "string" },
             docs: { type: "string" },
@@ -126,8 +121,8 @@ app.use(paymentMiddleware(
       config: {
         description: "List token launches with optional filtering.",
         inputSchema: {
-          type: "object",
-          properties: {
+          bodyType: "json",
+          bodyFields: {
             filter: {
               type: "string",
               enum: ["open", "graduated", "refundable"],
@@ -144,16 +139,15 @@ app.use(paymentMiddleware(
       config: {
         description: "Get detailed information about a specific token, including launch status and purchase statistics, and token metadata.",
         inputSchema: {
-          type: "object",
-          required: ["token"],
-          properties: {
+          bodyType: "json",
+          bodyFields: {
             token: {
               type: "string",
-              description: "The token contract address (e.g., 0x...)"
+              description: "The token contract address (e.g., 0x...)",
+              required: true
             }
           }
-        },
-        outputSchema: { type: "object" }
+        }
       }
     },
 
@@ -163,16 +157,15 @@ app.use(paymentMiddleware(
       config: {
         description: "Check the status of a purchase transaction.",
         inputSchema: {
-          type: "object",
-          required: ["reference"],
-          properties: {
+          bodyType: "json",
+          bodyFields: {
             reference: {
               type: "string",
-              description: "The reference ID returned from the buy endpoint"
+              description: "The reference ID returned from the buy endpoint",
+              required: true
             }
           }
-        },
-        outputSchema: { type: "object" }
+        }
       }
     },
 
@@ -182,16 +175,15 @@ app.use(paymentMiddleware(
       config: {
         description: "Check the status of a coin creation. Returns the token contract address if it has been created.",
         inputSchema: {
-          type: "object",
-          required: ["reference"],
-          properties: {
+          bodyType: "json",
+          bodyFields: {
             reference: {
               type: "string",
-              description: "The reference ID returned from the coin endpoint"
+              description: "The reference ID returned from the coin endpoint",
+              required: true
             }
           }
-        },
-        outputSchema: { type: "object" }
+        }
       }
     }
   }
@@ -225,16 +217,27 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
     const remainingUSDC = (launch.targetUsdc6d || 0n) - (launch.usdcAccounted6d || 0n);
     const needsRefund = launch.graduated || remainingUSDC < expectedUsdcAmount;
 
-    const purchase = await prisma.purchase.create({
-      data: {
-        tokenLower,
-        onchainId: launch.onchainId,
-        payer,
-        recipient: actualRecipient,
-        usdcAmount6d: value,
-        x402Nonce: nonce!,
-        status: needsRefund ? "to_refund" : "queued"
+    const purchase = await prisma.$transaction(async (tx) => {
+      const created = await tx.purchase.create({
+        data: {
+          tokenLower,
+          onchainId: launch.onchainId,
+          payer,
+          recipient: actualRecipient,
+          usdcAmount6d: value,
+          x402Nonce: nonce!,
+          status: needsRefund ? "to_refund" : "queued"
+        }
+      });
+
+      if (!needsRefund) {
+        await tx.launch.update({
+          where: { tokenLower },
+          data: { usdcQueued6d: { increment: value } }
+        });
       }
+
+      return created;
     });
 
     if (needsRefund) {
@@ -267,7 +270,7 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
       message: "Payment received. Your tokens will be transferred to you shortly."
     });
   } catch (e) {
-    console.error(e);
+    log.error({ err: e }, "handleBuy failed");
     res.status(500).json({ error: "server_error" });
   }
 }
@@ -351,7 +354,7 @@ app.post("/metadata/update", async (req, res) => {
       where: { tokenLower },
       select: { creator: true, contractUri: true, name: true, symbol: true }
     });
-    if (!launch) return res.status(404).json({ error: "unknown_token" });
+    if (!launch) return res.status(404).json({ error: "token_not_found" });
     if (launch.creator.toLowerCase() !== payer.toLowerCase()) {
       return res.status(403).json({ error: "not_creator" });
     }
@@ -384,7 +387,7 @@ app.post("/metadata/update", async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
-    console.error(e);
+    log.error({ err: e }, "metadata update failed");
     res.status(500).json({ error: "server_error" });
   }
 });
@@ -417,7 +420,8 @@ app.post("/launches", async (req, res) => {
       graduated: true,
       createdAt: true,
       usdcAccounted6d: true,
-      targetUsdc6d: true
+      targetUsdc6d: true,
+      usdcQueued6d: true
     }
   });
 
@@ -433,7 +437,8 @@ app.post("/launches", async (req, res) => {
       graduated: l.graduated,
       createdAt: l.createdAt,
       usdc_accounted: formatUnits(l.usdcAccounted6d, 6),
-      target_usdc: formatUnits(l.targetUsdc6d, 6)
+      target_usdc: formatUnits(l.targetUsdc6d, 6),
+      usdc_queued: formatUnits(l.usdcQueued6d, 6)
     })),
     notes: "The data is cached and might not be up-to-date. Call the token_info API to get fresh information for a specific token."
   });
@@ -459,35 +464,34 @@ app.post("/token_info", async (req, res) => {
         graduated: true,
         createdAt: true,
         usdcAccounted6d: true,
-        targetUsdc6d: true
+        targetUsdc6d: true,
+        usdcQueued6d: true
       }
     });
 
     if (!launch) return res.status(404).json({ error: "unknown_token" });
 
-    const queuedPurchases = await prisma.purchase.aggregate({
+    const queuedCount = await prisma.purchase.count({
       where: {
         tokenLower,
         status: "queued"
-      },
-      _count: true,
-      _sum: { usdcAmount6d: true }
+      }
     });
 
-    const handledPurchases = await prisma.purchase.aggregate({
+    const completedCount = await prisma.purchase.count({
       where: {
         tokenLower,
-        status: "handled"
-      },
-      _count: true,
-      _sum: { usdcAmount6d: true }
+        status: "completed"
+      }
     });
 
     let metadata = null;
     try {
       const key = tokenMetadataKey(tokenLower);
       metadata = await getMetadataJson(key);
-    } catch {}
+    } catch {
+      metadata = "Metadata not found";
+    }
 
     res.json({
       token: tokenLower,
@@ -501,20 +505,13 @@ app.post("/token_info", async (req, res) => {
         contractUri: launch.contractUri,
         graduated: launch.graduated,
         createdAt: launch.createdAt,
-        usdc_accounted: formatUnits(launch.usdcAccounted6d, 6),
-        target_usdc: formatUnits(launch.targetUsdc6d, 6)
+        usdc_accounted: formatUnits(launch.usdcAccounted6d ?? 0n, 6),
+        target_usdc: formatUnits(launch.targetUsdc6d ?? 0n, 6),
+        usdc_queued: formatUnits(launch.usdcQueued6d ?? 0n, 6),
+        queued_purchases: queuedCount,
+        completed_purchases: completedCount
       },
       metadata,
-      purchases: {
-        queued: {
-          count: queuedPurchases._count,
-          usdc_sum: formatUnits(queuedPurchases._sum.usdcAmount6d || 0n, 6)
-        },
-        handled: {
-          count: handledPurchases._count,
-          usdc_sum: formatUnits(handledPurchases._sum.usdcAmount6d || 0n, 6)
-        }
-      }
     });
   } catch (e) {
     return res.status(400).json({ error: "bad_token" });
@@ -554,7 +551,7 @@ app.post("/buy_status", async (req, res) => {
       created_at: purchase.createdAt
     });
   } catch (e) {
-    console.error(e);
+    log.error({ err: e }, "buy_status failed");
     res.status(500).json({ error: "server_error" });
   }
 });
@@ -598,7 +595,7 @@ app.post("/coin_status", async (req, res) => {
       created_at: launch.createdAt
     });
   } catch (e) {
-    console.error(e);
+    log.error({ err: e }, "coin_status failed");
     res.status(500).json({ error: "server_error" });
   }
 });

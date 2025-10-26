@@ -60,9 +60,13 @@ async function handlePURCHASE(job: any) {
 
   const purchase = await prisma.purchase.findUnique({
     where: { id: purchaseId },
-    select: { payer: true }
+    select: { payer: true, status: true }
   });
   if (!purchase) throw new Error("purchase_not_found");
+  if (purchase.status !== "queued") {
+    log.info({ tokenLower, purchaseId, status: purchase.status }, "Skipping purchase - status no longer queued");
+    return;
+  }
 
   const launch = await prisma.launch.findUnique({
     where: { tokenLower },
@@ -75,10 +79,16 @@ async function handlePURCHASE(job: any) {
 
   if (L.graduated) {
     log.warn({ tokenLower, recipient, purchaseId }, "Purchase failed: launch already graduated, enqueueing refund");
-    await prisma.purchase.update({
-      where: { id: purchaseId },
-      data: { status: "to_refund" }
-    });
+    await prisma.$transaction([
+      prisma.purchase.update({
+        where: { id: purchaseId },
+        data: { status: "to_refund" }
+      }),
+      prisma.launch.update({
+        where: { tokenLower },
+        data: { usdcQueued6d: { decrement: usdcAmountBigInt } }
+      })
+    ]);
     await enqueueJob("REFUND", `refund:${purchaseId}`, {
       purchaseId,
       tokenLower,
@@ -95,10 +105,16 @@ async function handlePURCHASE(job: any) {
 
   if (tokensRequested > remainingAllocation) {
     log.warn({ tokenLower, recipient, purchaseId, remainingAllocation: remainingAllocation.toString() }, "Purchase failed: insufficient allocation, enqueueing refund");
-    await prisma.purchase.update({
-      where: { id: purchaseId },
-      data: { status: "to_refund" }
-    });
+    await prisma.$transaction([
+      prisma.purchase.update({
+        where: { id: purchaseId },
+        data: { status: "to_refund" }
+      }),
+      prisma.launch.update({
+        where: { tokenLower },
+        data: { usdcQueued6d: { decrement: usdcAmountBigInt } }
+      })
+    ]);
     await enqueueJob("REFUND", `refund:${purchaseId}`, {
       purchaseId,
       tokenLower,
@@ -115,7 +131,7 @@ async function handlePURCHASE(job: any) {
   await prisma.purchase.update({
     where: { id: purchaseId },
     data: {
-      status: "handled",
+      status: "completed",
       operator: vm.runner?.address ?? "operator",
       txHash: tx.hash
     }
@@ -125,6 +141,7 @@ async function handlePURCHASE(job: any) {
   await prisma.launch.update({
     where: { tokenLower },
     data: {
+      usdcQueued6d: { decrement: usdcAmountBigInt },
       usdcAccounted6d: updatedL.usdcAccounted,
       graduated: updatedL.graduated
     }
@@ -188,7 +205,7 @@ async function processNextJob() {
     else if (job.kind === "REFUND") await handleREFUND(job);
     await finishJob(job.id, true);
   } catch (e) {
-    console.error(e);
+    log.error({ err: e, jobId: job.id, kind: job.kind }, "Job processing failed");
     if (job.kind === "COIN") {
       const { launchId } = job.payload as any;
       if (launchId) {
@@ -211,7 +228,7 @@ async function workerLoop(slot: number) {
 
 for (let i = 0; i < CONCURRENCY; i++) {
   workerLoop(i).catch((err) => {
-    console.error("Worker loop crashed", err);
+    log.error({ err }, "Worker loop crashed");
     process.exit(1);
   });
 }
@@ -225,7 +242,7 @@ if (WATCHDOG_INTERVAL_MS > 0 && JOB_LEASE_MS > 0) {
         }
       })
       .catch((err) => {
-        console.error("Watchdog failed", err);
+        log.error({ err }, "Watchdog failed");
       });
   }, WATCHDOG_INTERVAL_MS).unref?.();
 }

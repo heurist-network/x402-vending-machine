@@ -1,5 +1,8 @@
 import { privateKeyToAccount } from "viem/accounts";
 import { wrapFetchWithPayment, decodeXPaymentResponse } from "x402-fetch";
+import pino from "pino";
+
+const log = pino({ level: process.env.LOG_LEVEL || "info" });
 
 async function main() {
   // Load private key from environment variable
@@ -14,14 +17,14 @@ async function main() {
     privateKey.startsWith("0x") ? privateKey as `0x${string}` : `0x${privateKey}` as `0x${string}`
   );
 
-  console.log("Using account:", account.address);
+  log.info({ address: account.address }, "Using account");
 
   // Wrap fetch with x402 payment capability
   const fetchWithPayment = wrapFetchWithPayment(fetch, account);
 
   // Call the x402 endpoint
   const url = "http://localhost:8080/demo";
-  console.log(`Making x402 request to ${url}...`);
+  log.info({ url }, "Making x402 request");
 
   try {
     const response = await fetchWithPayment(url, {
@@ -33,18 +36,18 @@ async function main() {
 
     // Get the response body
     const body = await response.json();
-    console.log("\nResponse body:", JSON.stringify(body, null, 2));
+    log.info({ body }, "Response body");
 
     // Decode and display payment information
     const paymentResponseHeader = response.headers.get("x-payment-response");
     if (paymentResponseHeader) {
       const paymentResponse = decodeXPaymentResponse(paymentResponseHeader);
-      console.log("\nPayment details:", JSON.stringify(paymentResponse, null, 2));
+      log.info({ paymentResponse }, "Payment details");
     }
 
-    console.log("\n✅ x402 payment flow completed successfully!");
+    log.info("✅ x402 payment flow completed successfully!");
   } catch (error) {
-    console.error("❌ Error:", error);
+    log.error({ err: error }, "❌ x402 payment flow failed");
     process.exit(1);
   }
 }
