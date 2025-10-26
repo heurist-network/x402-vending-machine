@@ -20,14 +20,14 @@ bun run scripts/coin-test.ts --env-file .env.testing --name "Test Token" --symbo
 Copy the returned `reference` and poll its status:
 
 ```
-bun run scripts/coin-status.ts --reference b0ba0e57-35f3-4c06-9943-e19157a4e821 --env-file .env.testing 
+bun run scripts/coin-status.ts  --env-file .env.testing --reference b0ba0e57-35f3-4c06-9943-e19157a4e821 
 ```
 
 List recent launches or inspect a specific token:
 
 ```
-bun run scripts/db-snapshot.ts --limit 10 --env-file .env.testing 
-bun run scripts/db-snapshot.ts --token <token-address> --env-file .env.testing 
+bun run scripts/db-snapshot.ts --env-file .env.testing  --limit 10 
+bun run scripts/db-snapshot.ts --env-file .env.testing  --token <token-address> 
 ```
 
 ## Buy into the launch
@@ -45,7 +45,7 @@ bun --env-file .env.testing run scripts/buy-status.ts --reference <buy-reference
 ## Run operators manually
 
 ```
-bun run scripts/process-jobs.ts --max 1 --env-file .env.testing 
+bun run scripts/process-jobs.ts --env-file .env.testing  --max 1 
 ```
 
 This pulls up to `max` queued jobs and executes them with the same handler logic as the worker service.

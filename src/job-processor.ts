@@ -87,6 +87,8 @@ async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContr
     await updateJobPayload(job, { txHash });
     receipt = await tx.wait();
     if (receipt.status !== 1) throw new Error("coin_tx_failed");
+
+    // TODO: verify the contract on basescan
   }
 
   const parsed = receipt.logs

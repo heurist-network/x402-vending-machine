@@ -38,9 +38,9 @@ async function printLaunch(launch: any) {
     status: launch.status,
     graduated: launch.graduated,
     createdAt: launch.createdAt,
-    usdcAccounted: formatUnits(launch.usdcAccounted6d, 6),
-    usdcQueued: formatUnits(launch.usdcQueued6d, 6),
-    targetUsdc: formatUnits(launch.targetUsdc6d, 6)
+    usdcAccounted: launch.usdcAccounted6d !== null ? formatUnits(launch.usdcAccounted6d, 6) : null,
+    usdcQueued: launch.usdcQueued6d !== null ? formatUnits(launch.usdcQueued6d, 6) : "0",
+    targetUsdc: launch.targetUsdc6d !== null ? formatUnits(launch.targetUsdc6d, 6) : null
   });
 }
 

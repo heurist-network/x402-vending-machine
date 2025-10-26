@@ -458,9 +458,9 @@ app.post("/launches", async (req, res) => {
         contractUri: l.contractUri,
         graduated: l.graduated,
         createdAt: l.createdAt,
-        usdc_accounted: formatUnits(l.usdcAccounted6d, 6),
-        target_usdc: formatUnits(l.targetUsdc6d, 6),
-        usdc_queued: formatUnits(l.usdcQueued6d, 6)
+        usdc_accounted: formatUnits(l.usdcAccounted6d ?? 0n, 6),
+        target_usdc: formatUnits(l.targetUsdc6d ?? 0n, 6),
+        usdc_queued: formatUnits(l.usdcQueued6d ?? 0n, 6)
       })),
       notes: "The data is cached and might not be up-to-date. Call the token_info API to get fresh information for a specific token."
     });
