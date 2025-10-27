@@ -24,29 +24,30 @@ if (!PAY_TO) throw new Error("PAY_TO_VAULT missing");
 
 const web3Promise = initContracts();
 
+const COIN_API_INPUT_SCHEMA = {
+  bodyType: "json",
+  bodyFields: {
+    name: { type: "string", required: true },
+    symbol: { type: "string", required: true },
+    creator: { type: "string", description: "The address that can update token metadata. Default is the API caller." },
+    imageUrl: { type: "string" },
+    website: { type: "string" },
+    docs: { type: "string" },
+    twitter: { type: "string" },
+    telegram: { type: "string" },
+    discord: { type: "string" },
+    description: { type: "string" }
+  }
+} as const;
+
 app.use(paymentMiddleware(
   PAY_TO,
   {
-    "POST /buyTest": {
-      price: "$4.50",
-      network: NETWORK,
-      config: {
-        description: "Buy 4.50 USDC. Testing only.",
-        inputSchema: {
-          bodyType: "json",
-          bodyFields: {
-            token: { type: "string", description: "Token address", required: true },
-            recipient: { type: "string", description: "Optional recipient address; default is the API caller" }
-          }
-        }
-      }
-    },
-
-    "POST /buyHalf": {
+    "POST /x402/buyHalf": {
       price: "$0.50",
       network: NETWORK,
       config: {
-        description: "Buy 0.50 USDC. Testing only.",
+        description: "Buy 0.50 USDC worth of tokens from the vending machine. The token launch must be open to buy, and the allocation cap must not have been reached.",
         inputSchema: {
           bodyType: "json",
           bodyFields: {
@@ -57,7 +58,7 @@ app.use(paymentMiddleware(
       }
     },
 
-    "POST /buy": {
+    "POST /x402/buy": {
       price: "$1.00",
       network: NETWORK,
       config: {
@@ -72,7 +73,7 @@ app.use(paymentMiddleware(
       }
     },
 
-    "POST /buy10x": {
+    "POST /x402/buy10x": {
       price: "$10.00",
       network: NETWORK,
       config: {
@@ -87,31 +88,34 @@ app.use(paymentMiddleware(
       }
     },
 
-    "POST /coin": {
-      price: "$0.01", // TODO: change to $20 for launch
+    "POST /x402/coin/test": {
+      price: "$0.01",
       network: NETWORK,
       config: {
-        description: "Create a coin and offer it for sale.",
-        inputSchema: {
-          bodyType: "json",
-          bodyFields: {
-            name: { type: "string", required: true },
-            symbol: { type: "string", required: true },
-            creator: { type: "string", description: "The address that can update token metadata. Default is the API caller." },
-            size: { type: "string", enum: ["TEST","S","L"], required: true },
-            imageUrl: { type: "string" },
-            website: { type: "string" },
-            docs: { type: "string" },
-            twitter: { type: "string" },
-            telegram: { type: "string" },
-            discord: { type: "string" },
-            description: { type: "string" }
-          }
-        }
+        description: "Create a TEST size coin and offer it for sale. TEST size is for testing purposes.",
+        inputSchema: COIN_API_INPUT_SCHEMA
       }
     },
 
-    "POST /metadata/update": {
+    "POST /x402/coin/sm": {
+      price: "$20.00",
+      network: NETWORK,
+      config: {
+        description: "Create a SMALL (S) size coin and offer it for sale.",
+        inputSchema: COIN_API_INPUT_SCHEMA
+      }
+    },
+
+    "POST /x402/coin/lg": {
+      price: "$100.00",
+      network: NETWORK,
+      config: {
+        description: "Create a LARGE (L) size coin and offer it for sale.",
+        inputSchema: COIN_API_INPUT_SCHEMA
+      }
+    },
+
+    "POST /x402/metadata/update": {
       price: "$0.01",
       network: NETWORK,
       config: {
@@ -132,7 +136,7 @@ app.use(paymentMiddleware(
       }
     },
 
-    "POST /launches": {
+    "POST /x402/launches": {
       price: "$0.01",
       network: NETWORK,
       config: {
@@ -150,7 +154,7 @@ app.use(paymentMiddleware(
       }
     },
 
-    "POST /token_info": {
+    "POST /x402/token_info": {
       price: "$0.001",
       network: NETWORK,
       config: {
@@ -168,7 +172,7 @@ app.use(paymentMiddleware(
       }
     },
 
-    "POST /buy_status": {
+    "POST /x402/buy_status": {
       price: "$0.01",
       network: NETWORK,
       config: {
@@ -186,7 +190,7 @@ app.use(paymentMiddleware(
       }
     },
 
-    "POST /coin_status": {
+    "POST /x402/coin_status": {
       price: "$0.01",
       network: NETWORK,
       config: {
@@ -312,26 +316,22 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
   }
 }
 
-app.post("/buy", async (req, res) => {
+app.post("/x402/buy", async (req, res) => {
   await handleBuy(req, res, 1_000_000n);
 });
 
-app.post("/buy10x", async (req, res) => {
+app.post("/x402/buy10x", async (req, res) => {
   await handleBuy(req, res, 10_000_000n);
 });
 
-app.post("/buyHalf", async (req, res) => {
+app.post("/x402/buyHalf", async (req, res) => {
   await handleBuy(req, res, 500_000n);
 });
 
-app.post("/buyTest", async (req, res) => {
-  await handleBuy(req, res, 4_500_000n);
-});
-
-app.post("/coin", async (req, res) => {
+async function handleCoin(req: any, res: any, size: "TEST" | "S" | "L") {
   try {
-    const { name, symbol, size } = req.body || {};
-    if (!name || !symbol || !["TEST", "S", "L"].includes(size)) {
+    const { name, symbol } = req.body || {};
+    if (!name || !symbol) {
       return res.status(400).json({ error: "bad_request" });
     }
 
@@ -394,9 +394,21 @@ app.post("/coin", async (req, res) => {
       res.status(500).json({ error: "server_error" });
     }
   }
+}
+
+app.post("/x402/coin/test", async (req, res) => {
+  await handleCoin(req, res, "TEST");
 });
 
-app.post("/metadata/update", async (req, res) => {
+app.post("/x402/coin/sm", async (req, res) => {
+  await handleCoin(req, res, "S");
+});
+
+app.post("/x402/coin/lg", async (req, res) => {
+  await handleCoin(req, res, "L");
+});
+
+app.post("/x402/metadata/update", async (req, res) => {
   try {
     const launchId = String(req.body?.launchId || req.body?.launch || "").trim();
     if (!launchId) return res.status(400).json({ error: "missing_launch_id" });
@@ -450,7 +462,7 @@ app.post("/metadata/update", async (req, res) => {
   }
 });
 
-app.post("/launches", async (req, res) => {
+app.post("/x402/launches", async (req, res) => {
   try {
     const filter = String(req.body?.filter || "").toLowerCase();
     const now14 = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
@@ -507,7 +519,7 @@ app.post("/launches", async (req, res) => {
   }
 });
 
-app.post("/token_info", async (req, res) => {
+app.post("/x402/token_info", async (req, res) => {
   try {
     const tokenLower = toLowerAddr(String(req.body?.token || ""));
     if (!/^0x[a-fA-F0-9]{40}$/.test(tokenLower)) {
@@ -582,7 +594,7 @@ app.post("/token_info", async (req, res) => {
   }
 });
 
-app.post("/buy_status", async (req, res) => {
+app.post("/x402/buy_status", async (req, res) => {
   try {
     const reference = String(req.body?.reference || "");
     if (!reference) return res.status(400).json({ error: "missing_reference" });
@@ -631,7 +643,7 @@ app.post("/buy_status", async (req, res) => {
   }
 });
 
-app.post("/coin_status", async (req, res) => {
+app.post("/x402/coin_status", async (req, res) => {
   try {
     const reference = String(req.body?.reference || "");
     if (!reference) return res.status(400).json({ error: "missing_reference" });
