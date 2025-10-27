@@ -43,11 +43,11 @@ const COIN_API_INPUT_SCHEMA = {
 app.use(paymentMiddleware(
   PAY_TO,
   {
-    "POST /x402/buyHalf": {
-      price: "$0.50",
+    "POST /x402/buy": {
+      price: "$1.00",
       network: NETWORK,
       config: {
-        description: "Buy 0.50 USDC worth of tokens from the vending machine. The token launch must be open to buy, and the allocation cap must not have been reached.",
+        description: "Buy 1 USDC worth of tokens from the vending machine. The token launch must be open to buy, and the allocation cap must not have been reached.",
         inputSchema: {
           bodyType: "json",
           bodyFields: {
@@ -58,11 +58,11 @@ app.use(paymentMiddleware(
       }
     },
 
-    "POST /x402/buy": {
-      price: "$1.00",
+    "POST /x402/buy5x": {
+      price: "$5.00",
       network: NETWORK,
       config: {
-        description: "Buy 1 USDC worth of tokens from the vending machine. The token launch must be open to buy, and the allocation cap must not have been reached.",
+        description: "Buy 5 USDC worth of tokens from the vending machine. The token launch must be open to buy, and the allocation cap must not have been reached.",
         inputSchema: {
           bodyType: "json",
           bodyFields: {
@@ -89,34 +89,34 @@ app.use(paymentMiddleware(
     },
 
     "POST /x402/coin/test": {
-      price: "$0.01",
+      price: "$1.00",
       network: NETWORK,
       config: {
-        description: "Create a TEST size coin and offer it for sale. TEST size is for testing purposes.",
+        description: "Launch a token for testing and offer it for sale. 1 billion total supply. Sales cap is 4 USDC.",
         inputSchema: COIN_API_INPUT_SCHEMA
       }
     },
 
     "POST /x402/coin/sm": {
-      price: "$20.00",
+      price: "$5.00",
       network: NETWORK,
       config: {
-        description: "Create a SMALL (S) size coin and offer it for sale.",
+        description: "Launch a token and offer it for sale. 1 billion total supply. Sales cap is 4000 USDC. Initial FDV is $5000. Name and symbol are required. Other metadata fields can always be updated by the creator with the /metadata/update endpoint later.",
         inputSchema: COIN_API_INPUT_SCHEMA
       }
     },
 
     "POST /x402/coin/lg": {
-      price: "$100.00",
+      price: "$10.00",
       network: NETWORK,
       config: {
-        description: "Create a LARGE (L) size coin and offer it for sale.",
+        description: "Launch a token and offer it for sale. 1 billion total supply. Sales cap is 40000 USDC. Initial FDV is $50000. Name and symbol are required. Other metadata fields can always be updated by the creator with the /metadata/update endpoint later.",
         inputSchema: COIN_API_INPUT_SCHEMA
       }
     },
 
     "POST /x402/metadata/update": {
-      price: "$0.01",
+      price: "$1.00",
       network: NETWORK,
       config: {
         description: "Update token metadata. You must be the token creator to call this endpoint.",
@@ -320,12 +320,12 @@ app.post("/x402/buy", async (req, res) => {
   await handleBuy(req, res, 1_000_000n);
 });
 
-app.post("/x402/buy10x", async (req, res) => {
-  await handleBuy(req, res, 10_000_000n);
+app.post("/x402/buy5x", async (req, res) => {
+  await handleBuy(req, res, 5_000_000n);
 });
 
-app.post("/x402/buyHalf", async (req, res) => {
-  await handleBuy(req, res, 500_000n);
+app.post("/x402/buy10x", async (req, res) => {
+  await handleBuy(req, res, 10_000_000n);
 });
 
 async function handleCoin(req: any, res: any, size: "TEST" | "S" | "L") {
