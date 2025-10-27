@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {AccessControl} from "openzeppelin-contracts/access/AccessControl.sol";
+import {AccessControlDefaultAdminRules} from "openzeppelin-contracts/access/extensions/AccessControlDefaultAdminRules.sol";
 import {IERC20} from "openzeppelin-contracts/token/ERC20/IERC20.sol";
 import {X402Token} from "./X402Token.sol";
 import {TreasuryVault, ISwapRouter02, IUniswapV2Router02} from "./TreasuryVault.sol";
@@ -11,7 +11,7 @@ interface IUniswapV2Factory {
     function createPair(address, address) external returns (address);
 }
 
-contract VendingMachine is AccessControl {
+contract VendingMachine is AccessControlDefaultAdminRules {
     // --- Roles / Errors
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     error NotOperator();
@@ -39,7 +39,7 @@ contract VendingMachine is AccessControl {
     uint256 private constant TOKENS_PER_USDC_S_6D    = 200_000 * 1e12;     // Small
     uint256 private constant TOKENS_PER_USDC_L_6D    =  20_000 * 1e12;     // Large
 
-    uint256 public constant FAIR_CAP = 900_000_000e18;
+    uint256 public constant FAIR_CAP = 800_000_000e18;
 
     enum Size { TEST, S, L }
 
@@ -51,7 +51,7 @@ contract VendingMachine is AccessControl {
 
         // accounting
         uint256 allocated;       // total allocated to buyers (18d)
-        uint256 targetUSDC;      // 4,500e6 (S) or 45,000e6 (L)
+        uint256 targetUSDC;      // 4e6 (TEST), 4,000e6 (S) or 40,000e6 (L)
         uint256 usdcAccounted;   // sum of contributions for this launch (6d)
         bool    graduated;
     }
@@ -77,7 +77,7 @@ contract VendingMachine is AccessControl {
     // --- Events
     event Coined(uint256 indexed id, address token, Size size, address creator, string contractURI);
     event PurchaseRecorded(uint256 indexed id, address buyer, uint256 usdcAmount, uint256 tokensAllocated);
-    event Graduated(uint256 indexed id, uint256 usdcIn, uint256 heuOut, uint256 lpBurned);
+    event Graduated(uint256 indexed id, uint256 usdcIn, uint256 heuOut, uint256 lpBurned, uint256 adminReward, uint256 creatorReward);
     event Claimed(uint256 indexed id, address buyer, uint256 tokens);
     event Refunded(uint256 indexed id, address buyer, uint256 usdcAmount);
     event EmergencyWithdrawn(uint256 usdcAmount, address to);
@@ -85,8 +85,10 @@ contract VendingMachine is AccessControl {
     event OperatorRemoved(address indexed operator);
     event HeuOraclePriceUpdated(uint256 newPrice);
 
-    constructor(address admin, address[] memory initialOperators) {
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+    constructor(address admin_, address[] memory initialOperators)
+        AccessControlDefaultAdminRules(1, admin_)
+    {
+        if (admin_ == address(0)) revert Zero();
 
         for (uint256 i = 0; i < initialOperators.length; i++) {
             address op = initialOperators[i];
@@ -179,8 +181,8 @@ contract VendingMachine is AccessControl {
         L.token     = token;
         L.size      = size;
         L.createdAt = uint64(block.timestamp);
-        // TEST = 4.5 USDC, S = 4500 USDC, L = 45000 USDC
-        L.targetUSDC= (size == Size.TEST) ? 4_500_000 : (size == Size.S) ? 4_500e6 : 45_000e6;
+        // TEST = 4 USDC, S = 4000 USDC, L = 40000 USDC (80% of total supply for public sale)
+        L.targetUSDC= (size == Size.TEST) ? 4_000_000 : (size == Size.S) ? 4_000e6 : 40_000e6;
 
         launchByToken[token] = id;
 
@@ -247,7 +249,7 @@ contract VendingMachine is AccessControl {
         }
     }
 
-    // --- Graduate (operator only): only when EXACTLY 900M allocated
+    // --- Graduate (operator only): only when EXACTLY 800M allocated (80% public sale)
     function graduate(uint256 id) external onlyOp {
         Launch storage L = _get(id);
         if (L.graduated) revert AlreadyGraduated();
@@ -273,7 +275,13 @@ contract VendingMachine is AccessControl {
         address token = L.token;
         X402Token(token).enableTransfers();
 
-        // Mint 100M to vault, then add v2 liquidity with ALL HEU acquired
+        // Mint rewards: 2% to admin, 8% to creator (fair launch model)
+        uint256 adminReward = 20_000_000e18;   // 2% of 1B
+        uint256 creatorReward = 80_000_000e18; // 8% of 1B
+        X402Token(token).mint(defaultAdmin(), adminReward);
+        X402Token(token).mint(L.creator, creatorReward);
+
+        // Mint 100M (10%) to vault, then add v2 liquidity with ALL HEU acquired
         X402Token(token).mint(vault, 100_000_000e18);
         uint256 heuBal = HEU.balanceOf(vault);
         TreasuryVault(vault).addLiquidityV2(
@@ -283,7 +291,7 @@ contract VendingMachine is AccessControl {
         );
 
         L.graduated = true;
-        emit Graduated(id, usdcIn, heuBal, 0);
+        emit Graduated(id, usdcIn, heuBal, 0, adminReward, creatorReward);
     }
 
     function refundable(address tokenAddress) external view returns (bool) {
