@@ -68,7 +68,12 @@ app.get("/", async (_req, res) => {
       },
       x402: {
         "/x402/buy": "Buy tokens (requires x402 payment)",
+        "/x402/buy2x": "Buy 2x tokens (requires x402 payment)",
+        "/x402/buy3x": "Buy 3x tokens (requires x402 payment)",
+        "/x402/buy4x": "Buy 4x tokens (requires x402 payment)",
+        "/x402/buy5x": "Buy 5x tokens (requires x402 payment)",
         "/x402/buy10x": "Buy 10x tokens (requires x402 payment)",
+        "/x402/buy20x": "Buy 20x tokens (requires x402 payment)",
         "/x402/coin": "Create a new coin (requires x402 payment)",
         "/x402/metadata/update": "Update token metadata (requires x402 payment)",
         "/x402/launches": "List token launches (requires x402 payment)",
