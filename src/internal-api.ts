@@ -33,10 +33,10 @@ async function generateCDPBearerToken(method: string, host: string, path: string
 }
 
 /**
- * GET /facilitator_health
+ * GET /internal/facilitator_health
  * Check if the Coinbase CDP x402 facilitator is functioning
  */
-app.get("/facilitator_health", async (_req, res) => {
+app.get("/internal/facilitator_health", async (_req, res) => {
   try {
     const host = "api.cdp.coinbase.com";
     const path = "/platform/v2/x402/supported";
@@ -87,8 +87,8 @@ app.get("/facilitator_health", async (_req, res) => {
   }
 });
 
-const SYSTEM_PORT = process.env.SYSTEM_PORT || 8081;
+const INTERNAL_PORT = process.env.INTERNAL_PORT || 8081;
 
-app.listen(SYSTEM_PORT, () => {
-  log.info(`System API (non-paywalled) on :${SYSTEM_PORT}`);
+app.listen(INTERNAL_PORT, () => {
+  log.info(`Internal API (localhost-only) on :${INTERNAL_PORT}`);
 });

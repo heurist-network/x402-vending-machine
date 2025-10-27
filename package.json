@@ -3,8 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "api": "bun src/vending-api.ts",
-    "system-api": "bun src/system-api.ts",
+    "vending-api": "bun src/vending-api.ts",
+    "public-api": "bun src/public-api.ts",
+    "internal-api": "bun src/internal-api.ts",
     "worker": "bun src/vending-worker.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
