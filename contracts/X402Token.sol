@@ -32,7 +32,7 @@ contract X402Token is ERC20, EIP712, AccessControl, IERC7572 {
     error NotBurner();
     error CapExceeded();
     error TransfersDisabled();
-    error AuthorizationUsed();
+    error AuthorizationAlreadyUsed();
     error AuthorizationExpired();
     error InvalidSignature();
     error BadRecipient();
@@ -103,7 +103,7 @@ contract X402Token is ERC20, EIP712, AccessControl, IERC7572 {
     }
 
     function _useAuthorization(address authorizer, bytes32 nonce) internal {
-        if (_authUsed[authorizer][nonce]) revert AuthorizationUsed();
+        if (_authUsed[authorizer][nonce]) revert AuthorizationAlreadyUsed();
         _authUsed[authorizer][nonce] = true;
         emit AuthorizationUsed(authorizer, nonce);
     }

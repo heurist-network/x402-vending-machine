@@ -31,7 +31,7 @@ contract VendingMachine is AccessControlDefaultAdminRules {
     IERC20 public constant USDC = IERC20(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913); // 6d
     IERC20 public constant HEU  = IERC20(0xEF22cb48B8483dF6152e1423b19dF5553BbD818b); // 18d
     ISwapRouter02 public constant V3_ROUTER     = ISwapRouter02(0x2626664c2603336E57B271c5C0b26F421741e481);
-    IUniswapV2Router02 public constant V2_ROUTER= IUniswapV2Router02(0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24);
+    IUniswapV2Router02 public constant V2_ROUTER= IUniswapV2Router02(0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24);
     IUniswapV2Factory  public constant V2_FACTORY = IUniswapV2Factory(0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6);
 
     // Prices (tokens per 1 USDC in 6d units)
