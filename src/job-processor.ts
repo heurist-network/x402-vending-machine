@@ -48,6 +48,82 @@ function sizeToIndex(size: string): number {
   return 2;
 }
 
+function getTargetUsdcForSize(sizeIndex: number): bigint {
+  if (sizeIndex === 0) return 4_500_000n; // TEST
+  if (sizeIndex === 1) return 4_500_000_000n; // S = 4500e6
+  return 45_000_000_000n; // L = 45000e6
+}
+
+function parseLaunchDataFromCoinedEvent(
+  receipt: any,
+  iface: ethers.Interface
+): { onchainId: number; token: string; size: number } | null {
+  const parsed = receipt.logs
+    .map((logItem: any) => {
+      try {
+        return iface.parseLog(logItem);
+      } catch {
+        return null;
+      }
+    })
+    .find((entry: any) => entry && entry.name === "Coined");
+
+  if (!parsed) return null;
+
+  return {
+    onchainId: Number(parsed.args.id),
+    token: (parsed.args.token as string).toLowerCase(),
+    size: Number(parsed.args.size)
+  };
+}
+
+function parsePurchaseDataFromReceipt(
+  receipt: any,
+  iface: ethers.Interface,
+  expectedOnchainId: number
+): { tokensAllocated: bigint; usdcAmount: bigint } | null {
+  const parsed = receipt.logs
+    .map((logItem: any) => {
+      try {
+        return iface.parseLog(logItem);
+      } catch {
+        return null;
+      }
+    })
+    .find((entry: any) => entry && entry.name === "PurchaseRecorded" && Number(entry.args.id) === expectedOnchainId);
+
+  if (!parsed) return null;
+
+  return {
+    tokensAllocated: parsed.args.tokensAllocated,
+    usdcAmount: parsed.args.usdcAmount
+  };
+}
+
+function parseGraduatedEventFromReceipt(
+  receipt: any,
+  iface: ethers.Interface,
+  expectedOnchainId: number
+): { usdcIn: bigint; heuOut: bigint; lpBurned: bigint } | null {
+  const parsed = receipt.logs
+    .map((logItem: any) => {
+      try {
+        return iface.parseLog(logItem);
+      } catch {
+        return null;
+      }
+    })
+    .find((entry: any) => entry && entry.name === "Graduated" && Number(entry.args.id) === expectedOnchainId);
+
+  if (!parsed) return null;
+
+  return {
+    usdcIn: parsed.args.usdcIn,
+    heuOut: parsed.args.heuOut,
+    lpBurned: parsed.args.lpBurned
+  };
+}
+
 async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContracts>>, job: any) {
   const { launchId, name, symbol, metadataUri, creator, size } = job.payload;
   if (!launchId) throw new Error("launch_id_missing");
@@ -85,10 +161,10 @@ async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContr
   if (prevStatus == "processing") {
     if (txHash) {
       receipt = await waitForReceipt(web3.provider, txHash);
-      if (receipt.status !== 1) throw new Error("coin_tx_failed for launch ID ${launchId} with tx hash ${txHash}");
+      if (receipt.status !== 1) throw new Error(`coin_tx_failed for launch ID ${launchId} with tx hash ${txHash}`);
     }
     else {
-      throw new Error("tx_hash_missing for launch ID ${launchId}");
+      throw new Error(`tx_hash_missing for launch ID ${launchId}`);
     }
   }
   else {
@@ -105,25 +181,22 @@ async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContr
 
     // wait for the tx to be confirmed - failures here are possible
     receipt = await tx.wait();
-    if (receipt.status !== 1) throw new Error("coin_tx_failed for launch ID ${launchId} with tx hash ${txHash}");
+    if (receipt.status !== 1) throw new Error(`coin_tx_failed for launch ID ${launchId} with tx hash ${txHash}`);
 
     // TODO: verify the contract on basescan
   }
 
-  const parsed = receipt.logs
-    .map((logItem: any) => {
-      try {
-        return iface.parseLog(logItem);
-      } catch {
-        return null;
-      }
-    })
-    .find((entry: any) => entry && entry.name === "Coined");
-  if (!parsed) throw new Error("Coined event not found for launch ID ${launchId} with tx hash ${txHash}");
+  const eventData = parseLaunchDataFromCoinedEvent(receipt, iface);
+  if (!eventData) throw new Error(`Coined event not found for launch ID ${launchId} with tx hash ${txHash}`);
 
-  const onchainId = Number(parsed.args.id);
-  const token = (parsed.args.token as string).toLowerCase();
-  const launchData = await readLaunch(web3.vm, onchainId);
+  const { onchainId, token, size: sizeIndex } = eventData;
+
+  // For a newly coined launch, we can derive the initial state deterministically:
+  // - allocated = 0
+  // - usdcAccounted = 0
+  // - graduated = false
+  // - targetUSDC = based on size
+  const targetUSDC = getTargetUsdcForSize(sizeIndex);
 
   await prisma.launch.update({
     where: { id: launchId },
@@ -133,9 +206,9 @@ async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContr
       onchainId,
       txHash,
       contractUri: metadataUri,
-      graduated: launchData.graduated,
-      targetUsdc6d: launchData.targetUSDC,
-      usdcAccounted6d: launchData.usdcAccounted
+      graduated: false,
+      targetUsdc6d: targetUSDC,
+      usdcAccounted6d: 0n
     }
   });
 
@@ -189,18 +262,20 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
   const usdcAmountBigInt = purchase.usdcAmount6d;
   const usdcAmountString = purchase.usdcAmount6d.toString();
 
+  // Read launch state BEFORE the transaction (for validation logic)
+  const L = await readLaunch(web3.vm, onchainId);
+
   // idempotency check: we must avoid calling the contract multiple times
   if (prevStatus == "processing") {
     if (txHash) {
       receipt = await waitForReceipt(web3.provider, txHash);
-      if (receipt.status !== 1) throw new Error("purchase_tx_failed for purchase ID ${purchaseId} with tx hash ${txHash}");
+      if (receipt.status !== 1) throw new Error(`purchase_tx_failed for purchase ID ${purchaseId} with tx hash ${txHash}`);
     }
     else {
-      throw new Error("tx_hash_missing for purchase ID ${purchaseId}");
+      throw new Error(`tx_hash_missing for purchase ID ${purchaseId}`);
     }
   }
   else {
-    const L = await readLaunch(web3.vm, onchainId);
 
     const FAIR_CAP = 900_000_000n * 10n ** 18n;
     const remainingAllocation = FAIR_CAP - L.allocated;
@@ -255,11 +330,16 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
       }
     });
     await updateJobPayload(job, { txHash, operator: operatorAddr });
-    const receipt = await tx.wait();
-    if (receipt.status !== 1) throw new Error("purchase_tx_failed for purchase ID ${purchaseId} with tx hash ${txHash}");
+    receipt = await tx.wait();
+    if (receipt.status !== 1) throw new Error(`purchase_tx_failed for purchase ID ${purchaseId} with tx hash ${txHash}`);
   }
 
-  const updatedL = await readLaunch(web3.vm, onchainId);
+  const iface = web3.vm.interface;
+  const purchaseEvent = parsePurchaseDataFromReceipt(receipt, iface, onchainId);
+  if (!purchaseEvent) throw new Error(`PurchaseRecorded event not found for purchase ID ${purchaseId} with tx hash ${txHash}`);
+
+  // Calculate new usdcAccounted based on event data + previous state
+  const newUsdcAccounted = L.usdcAccounted + purchaseEvent.usdcAmount;
 
   await prisma.$transaction([
     prisma.purchase.update({
@@ -272,13 +352,19 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
       where: { tokenLower },
       data: {
         usdcQueued6d: { decrement: usdcAmountBigInt },
-        usdcAccounted6d: updatedL.usdcAccounted,
-        graduated: updatedL.graduated
+        usdcAccounted6d: newUsdcAccounted,
       }
     })
   ]);
 
-  if (!updatedL.graduated && updatedL.usdcAccounted >= updatedL.targetUSDC) {
+  log.info({ 
+    tokenLower, 
+    onchainId, 
+    usdcAccounted: ethers.formatUnits(newUsdcAccounted, 6),
+    targetUSDC: ethers.formatUnits(L.targetUSDC, 6)
+  }, "PURCHASE completed");
+
+  if (!L.graduated && newUsdcAccounted >= L.targetUSDC) {
     await enqueueJob("GRADUATE", `grad:${tokenLower}`, { tokenLower }, undefined, 3);
     log.info({ tokenLower, onchainId }, "Auto-enqueued GRADUATE job - target USDC reached");
   }
@@ -320,10 +406,10 @@ async function handleGRADUATE(log: Logger, web3: Awaited<ReturnType<typeof initC
   if (prevStatus == "processing") {
     if (txHash) {
       receipt = await waitForReceipt(web3.provider, txHash);
-      if (receipt.status !== 1) throw new Error("graduate_tx_failed for launch ID ${launchId} with tx hash ${txHash}");
+      if (receipt.status !== 1) throw new Error(`graduate_tx_failed for launch ID ${launchId} with tx hash ${txHash}`);
     }
     else {
-      throw new Error("tx_hash_missing for launch ID ${launchId}");
+      throw new Error(`tx_hash_missing for launch ID ${launchId}`);
     }
   }
   else {
@@ -337,18 +423,24 @@ async function handleGRADUATE(log: Logger, web3: Awaited<ReturnType<typeof initC
     });
     await updateJobPayload(job, { txHash });
 
-    const receipt = await tx.wait();
-    if (receipt.status !== 1) throw new Error("graduate_tx_failed for launch ID ${launchId} with tx hash ${txHash}");
+    receipt = await tx.wait();
+    if (receipt.status !== 1) throw new Error(`graduate_tx_failed for launch ID ${launchId} with tx hash ${txHash}`);
   }
 
-  const updatedL = await readLaunch(web3.vm, onchainId);
+  // Parse the Graduated event from receipt to verify graduation
+  const iface = web3.vm.interface;
+  const graduatedEvent = parseGraduatedEventFromReceipt(receipt, iface, onchainId);
+  if (!graduatedEvent) throw new Error(`Graduated event not found for token ${tokenLower} with tx hash ${txHash}`);
 
+  // After successful graduation:
+  // - graduated = true
+  // - usdcAccounted = 0
   await prisma.launch.update({
     where: { tokenLower },
     data: {
       status: "active",
-      graduated: updatedL.graduated,
-      usdcAccounted6d: updatedL.usdcAccounted
+      graduated: true,
+      usdcAccounted6d: 0n
     }
   });
 

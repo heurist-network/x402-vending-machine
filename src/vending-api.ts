@@ -170,6 +170,14 @@ async function handleCoin(req: any, res: any, size: "TEST" | "S" | "L") {
       return res.status(400).json({ error: "bad_request" });
     }
 
+    if (name.toLowerCase().includes("heurist") || symbol.toLowerCase().includes("heurist")) {
+      return res.status(400).json({ error: "invalid_name_or_symbol" });
+    }
+
+    if (name.length > 32 || symbol.length > 10) {
+      return res.status(400).json({ error: "name_or_symbol_too_long" });
+    }
+
     const xp = req.get("x-payment");
     if (!xp) return res.status(400).json({ error: "missing_x_payment_header" });
     const { payer, nonce } = parseXPayment(xp);

@@ -14,13 +14,13 @@ STATUS_PRIVATE_KEY_ENV=PRIVATE_KEY_STATUS
 ## Launch a TEST coin
 
 ```
-bun run scripts/coin-test.ts --env-file .env.testing --name "Test Token" --symbol TEST --size TEST
+bun run scripts/coin-test.ts --env-file .env.testing --name "New Test Token" --symbol TEST --size TEST
 ```
 
 Copy the returned `reference` and poll its status:
 
 ```
-bun run scripts/coin-status.ts  --env-file .env.testing --reference b0ba0e57-35f3-4c06-9943-e19157a4e821 
+bun run scripts/coin-status.ts  --env-file .env.testing --reference 5a588f8c-aef7-4d2e-87f2-64dccde4ee42
 ```
 
 ## Query launch information via API

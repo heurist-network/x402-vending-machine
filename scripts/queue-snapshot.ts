@@ -38,7 +38,7 @@ async function main() {
       {
         id: job.id,
         kind: job.kind,
-        status: job.status,
+        job_status: job.status,
         attempts: job.attempts,
         maxAttempts: job.maxAttempts,
         runAfter: job.runAfter,
