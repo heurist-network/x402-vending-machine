@@ -316,3 +316,4 @@ Required for worker operation:
 - `VENDING_MACHINE_ADDRESS` - Deployed contract address
 - `OPERATOR_KEYS` - Comma-separated private keys for operators
 - `DATABASE_URL` - PostgreSQL connection string
+- `PUBLIC_BASE_URL` - Optional base URL for public API responses (defaults to `http://localhost:${PUBLIC_PORT}`)

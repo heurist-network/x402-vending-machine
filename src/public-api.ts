@@ -7,6 +7,41 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
+const PUBLIC_PORT = Number(process.env.PUBLIC_PORT || "8082");
+const DEFAULT_BASE_URL = `http://localhost:${PUBLIC_PORT}`;
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, "");
+
+type EndpointDescriptor = {
+  path: string;
+  description: string;
+};
+
+function buildEndpointMap(entries: EndpointDescriptor[]) {
+  return entries.reduce<Record<string, { url: string; description: string }>>((acc, entry) => {
+    acc[entry.path] = {
+      url: `${PUBLIC_BASE_URL}${entry.path}`,
+      description: entry.description
+    };
+    return acc;
+  }, {});
+}
+
+const X402_ENDPOINTS = buildEndpointMap([
+  { path: "/x402/buy", description: "Buy tokens (requires x402 payment)" },
+  { path: "/x402/buy2x", description: "Buy 2x tokens (requires x402 payment)" },
+  { path: "/x402/buy3x", description: "Buy 3x tokens (requires x402 payment)" },
+  { path: "/x402/buy4x", description: "Buy 4x tokens (requires x402 payment)" },
+  { path: "/x402/buy5x", description: "Buy 5x tokens (requires x402 payment)" },
+  { path: "/x402/buy10x", description: "Buy 10x tokens (requires x402 payment)" },
+  { path: "/x402/buy20x", description: "Buy 20x tokens (requires x402 payment)" },
+  { path: "/x402/coin", description: "Create a new coin (requires x402 payment)" },
+  { path: "/x402/metadata/update", description: "Update token metadata (requires x402 payment)" },
+  { path: "/x402/launches", description: "List token launches (requires x402 payment)" },
+  { path: "/x402/token_info", description: "Get token information (requires x402 payment)" },
+  { path: "/x402/buy_status", description: "Check buy transaction status (requires x402 payment)" },
+  { path: "/x402/coin_status", description: "Check coin creation status (requires x402 payment)" }
+]);
+
 // Favicon cache
 let cachedFavicon: Buffer | null = null;
 let cachedType: string | null = null;
@@ -66,28 +101,12 @@ app.get("/", async (_req, res) => {
         "/health": "Service health check",
         "/favicon.ico": "Favicon"
       },
-      x402: {
-        "/x402/buy": "Buy tokens (requires x402 payment)",
-        "/x402/buy2x": "Buy 2x tokens (requires x402 payment)",
-        "/x402/buy3x": "Buy 3x tokens (requires x402 payment)",
-        "/x402/buy4x": "Buy 4x tokens (requires x402 payment)",
-        "/x402/buy5x": "Buy 5x tokens (requires x402 payment)",
-        "/x402/buy10x": "Buy 10x tokens (requires x402 payment)",
-        "/x402/buy20x": "Buy 20x tokens (requires x402 payment)",
-        "/x402/coin": "Create a new coin (requires x402 payment)",
-        "/x402/metadata/update": "Update token metadata (requires x402 payment)",
-        "/x402/launches": "List token launches (requires x402 payment)",
-        "/x402/token_info": "Get token information (requires x402 payment)",
-        "/x402/buy_status": "Check buy transaction status (requires x402 payment)",
-        "/x402/coin_status": "Check coin creation status (requires x402 payment)"
-      }
+      x402: X402_ENDPOINTS
     },
     documentation: "https://docs.heurist.ai"
   });
 });
 
-const PUBLIC_PORT = process.env.PUBLIC_PORT || 8082;
-
 app.listen(PUBLIC_PORT, () => {
-  log.info(`Public API (ungated) on :${PUBLIC_PORT}`);
+  log.info(`Public API (ungated) on :${PUBLIC_PORT} (base: ${PUBLIC_BASE_URL})`);
 });
