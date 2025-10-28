@@ -6,7 +6,7 @@ async function main() {
   log.info({ address: account.address }, "Using launcher wallet");
 
   const fetchWithPayment = createPaymentFetch(account);
-  const baseUrl = getApiBaseUrl(argString(args, "api"));
+  const baseUrl = getApiBaseUrl();
 
   const name = argString(args, "name") || process.env.COIN_NAME || `Test Launch ${Date.now()}`;
   const symbol = (argString(args, "symbol") || process.env.COIN_SYMBOL || `T${Math.random().toString(36).substring(2, 6)}`).toUpperCase();
@@ -26,9 +26,12 @@ async function main() {
     description: argString(args, "description") || process.env.COIN_DESCRIPTION || undefined
   };
 
-  log.info({ baseUrl, size, name, symbol }, "Submitting /coin request");
+  const sizeParam = size.toLowerCase();
+  const endpoint = `${baseUrl}/x402/coin/${sizeParam}`;
 
-  const response = await fetchWithPayment(`${baseUrl}/coin`, {
+  log.info({ endpoint, size, name, symbol }, "Submitting /coin request");
+
+  const response = await fetchWithPayment(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)

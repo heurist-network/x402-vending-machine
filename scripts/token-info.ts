@@ -6,12 +6,12 @@ async function main() {
   log.info({ address: account.address }, "Using wallet");
 
   const fetchWithPayment = createPaymentFetch(account);
-  const baseUrl = getApiBaseUrl(argString(args, "api"));
+  const baseUrl = getApiBaseUrl();
   const token = argString(args, "token") || process.env.TOKEN_ADDRESS || requireEnv("TOKEN_ADDRESS");
 
   log.info({ token }, "Calling /token_info");
 
-  const response = await fetchWithPayment(`${baseUrl}/token_info`, {
+  const response = await fetchWithPayment(`${baseUrl}/x402/token_info`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ token })

@@ -56,7 +56,7 @@ This system uses an asynchronous job queue pattern to handle blockchain operatio
 8. Mark job as completed
 ```
 
-**Status Progression**: `queued` → `in_progress` → `done`
+**Status Progression**: `queued` → `processing` → `active`
 
 ---
 
@@ -97,8 +97,8 @@ This system uses an asynchronous job queue pattern to handle blockchain operatio
 ```
 
 **Status Progression**:
-- Success: `queued` → `in_progress` → `completed`
-- Failed: `queued` → `in_progress` → `to_refund` (then REFUND job)
+- Success: `queued` → `processing` → `completed`
+- Failed: `queued` → `processing` → `to_refund` (then REFUND job)
 
 **Key Point**: Worker does onchain validation BEFORE processing!
 
@@ -159,7 +159,7 @@ if (!updatedL.graduated && updatedL.usdcAccounted >= updatedL.targetUSDC) {
 | Status | Meaning |
 |--------|---------|
 | `queued` | Job enqueued, waiting for worker |
-| `in_progress` | Worker processing |
+| `processing` | Worker claimed job and is working |
 | `completed` | Successfully processed on-chain |
 | `to_refund` | Failed validation, refund enqueued |
 | `refunded` | Refund transaction confirmed |

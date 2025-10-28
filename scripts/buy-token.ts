@@ -18,7 +18,7 @@ async function main() {
   log.info({ address: account.address }, "Using buyer wallet");
 
   const fetchWithPayment = createPaymentFetch(account);
-  const baseUrl = getApiBaseUrl(argString(args, "api"));
+  const baseUrl = getApiBaseUrl();
 
   const token = (argString(args, "token") || process.env.BUY_TOKEN || requireEnv("BUY_TOKEN")).toLowerCase();
   const recipient = argString(args, "recipient") || process.env.BUY_RECIPIENT || undefined;
@@ -29,7 +29,7 @@ async function main() {
     half: argBoolean(args, "half")
   });
 
-  const endpoint = `${baseUrl}/${route}`;
+  const endpoint = `${baseUrl}/x402/${route}`;
   const body = { token, recipient };
 
   log.info({ endpoint, token, recipient, route }, "Submitting buy request");

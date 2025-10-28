@@ -1,6 +1,19 @@
 import { privateKeyToAccount } from "viem/accounts";
 import { wrapFetchWithPayment, decodeXPaymentResponse } from "x402-fetch";
 import pino from "pino";
+import { config } from "dotenv";
+
+// Load env file if --env-file flag is provided
+const envFileIndex = process.argv.findIndex(arg => arg === "--env-file");
+if (envFileIndex !== -1 && process.argv[envFileIndex + 1]) {
+  config({ path: process.argv[envFileIndex + 1] });
+} else {
+  const envFileArg = process.argv.find(arg => arg.startsWith("--env-file="));
+  if (envFileArg) {
+    const path = envFileArg.split("=")[1];
+    config({ path });
+  }
+}
 
 export const log = pino({ level: process.env.SCRIPT_LOG_LEVEL || "info" });
 

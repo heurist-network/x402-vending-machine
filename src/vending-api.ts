@@ -503,7 +503,8 @@ app.post("/x402/coin_status", async (req, res) => {
         onchainId: true,
         txHash: true,
         error: true,
-        createdAt: true
+        createdAt: true,
+        graduated: true
       }
     });
 
@@ -511,7 +512,18 @@ app.post("/x402/coin_status", async (req, res) => {
       return res.status(404).json({ error: "launch_not_found" });
     }
 
-    const notes = launch.status === "completed" ? "Launch completed. The token is now available for purchase." : "Launch is still in progress. Please check back later.";
+    let notes: string;
+    if (launch.status === "failed") {
+      notes = launch.error ? `Launch failed: ${launch.error}` : "Launch failed. No error message available.";
+    } else if (launch.status === "active") {
+      notes = launch.graduated
+        ? "Launch completed and graduated. Trading on DEX is enabled."
+        : "Launch completed. The token is now available for purchase.";
+    } else if (launch.status === "processing") {
+      notes = "Launch transaction is confirming on-chain. Please check back shortly.";
+    } else {
+      notes = "Launch is still in progress. Please check back later.";
+    }
 
     res.json({
       status: launch.status,

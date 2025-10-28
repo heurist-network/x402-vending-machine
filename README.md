@@ -22,7 +22,7 @@ Key features:
 - Operators (trusted backend accounts) call `coin()` to deploy a new token created by the user.
 - When handlePurchase() or handleBatchPurchase() is called (after x402 verification), tokens are minted instantly to buyers.
 - Tokens are non-transferable until graduation, preventing premature trading.
-- Graduation: Once exactly 900 million tokens have been sold, anyone can call `graduate()`. The contract swaps all accounted USDC to HEU on Uniswap V3, mints 100M tokens for liquidity, add Token/HEU liquidity pair on Uniswap V2, and enables trading via `enableTransfers()`
+- Graduation: Once exactly 800 million tokens have been sold, anyone can call `graduate()`. The contract swaps all accounted USDC to HEU on Uniswap V3, mints 100M tokens for liquidity, add Token/HEU liquidity pair on Uniswap V2, and enables trading via `enableTransfers()`
 - Refunds: If the launch does not graduate within 14 days, operators can refund buyers one by one.
 
 2. X402Token.sol
@@ -77,7 +77,7 @@ The event processor subscribes to every verified purchase events, calls smart co
 
 3. Graduate
 
-- When 900 M tokens sold, the operator can call `graduate()`.
+- When 800 M tokens sold, the operator can call `graduate()`.
 - Vault swaps the accumulated USDC → HEU, adds LP, enables transfers. Token is now freely tradable.
 
 4. Refund

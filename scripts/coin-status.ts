@@ -6,12 +6,12 @@ async function main() {
   log.info({ address: account.address }, "Using status wallet");
 
   const fetchWithPayment = createPaymentFetch(account);
-  const baseUrl = getApiBaseUrl(argString(args, "api"));
+  const baseUrl = getApiBaseUrl();
   const reference = argString(args, "reference") || process.env.COIN_REFERENCE || requireEnv("COIN_REFERENCE");
 
   log.info({ reference }, "Checking /coin_status");
 
-  const response = await fetchWithPayment(`${baseUrl}/coin_status`, {
+  const response = await fetchWithPayment(`${baseUrl}/x402/coin_status`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ reference })

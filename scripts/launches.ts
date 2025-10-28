@@ -6,7 +6,7 @@ async function main() {
   log.info({ address: account.address }, "Using wallet");
 
   const fetchWithPayment = createPaymentFetch(account);
-  const baseUrl = getApiBaseUrl(argString(args, "api"));
+  const baseUrl = getApiBaseUrl();
   const filter = argString(args, "filter") || process.env.LAUNCHES_FILTER || undefined;
 
   const body: any = {};
@@ -16,7 +16,7 @@ async function main() {
 
   log.info({ filter: filter || "all" }, "Calling /launches");
 
-  const response = await fetchWithPayment(`${baseUrl}/launches`, {
+  const response = await fetchWithPayment(`${baseUrl}/x402/launches`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)

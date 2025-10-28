@@ -29,18 +29,18 @@ Test the `/launches` endpoint to list token launches with optional filtering:
 
 ```
 # List all launches
-bun run scripts/launches.ts --env-file .env.testing --api http://localhost:8080
+bun run --env-file .env.testing scripts/launches.ts
 
 # Filter by status: open, graduated, or refundable
-bun run scripts/launches.ts --env-file .env.testing --filter open
-bun run scripts/launches.ts --env-file .env.testing --filter graduated
-bun run scripts/launches.ts --env-file .env.testing --filter refundable
+bun run --env-file .env.testing scripts/launches.ts --filter open
+bun run --env-file .env.testing scripts/launches.ts --filter graduated
+bun run --env-file .env.testing scripts/launches.ts --filter refundable
 ```
 
 Get detailed token information via `/token_info`:
 
 ```
-bun run scripts/token-info.ts --env-file .env.testing --token <token-address>
+bun run --env-file .env.testing scripts/token-info.ts --token <token-address>
 ```
 
 ## Update token metadata
@@ -48,7 +48,7 @@ bun run scripts/token-info.ts --env-file .env.testing --token <token-address>
 Update metadata for a token you created via `/metadata/update`:
 
 ```
-bun run scripts/metadata-update.ts --env-file .env.testing --token <token-address> \
+bun run --env-file .env.testing scripts/metadata-update.ts --token <token-address> \
   --image-url "https://example.com/image.png" \
   --website "https://example.com" \
   --twitter "https://twitter.com/example" \
@@ -60,17 +60,17 @@ Supported metadata fields: `--image-url`, `--website`, `--docs`, `--twitter`, `-
 ## Buy into the launch
 
 ```
-bun run scripts/buy-token.ts --env-file .env.testing  --amount 1 --token <token-address>
+bun run --env-file .env.testing scripts/buy-token.ts --amount 1 --token <token-address>
 
-bun run scripts/buy-token.ts --env-file .env.testing  --test --token <token-address>
+bun run --env-file .env.testing scripts/buy-token.ts --test --token <token-address>
 
-bun run scripts/buy-token.ts --env-file .env.testing  --half --token <token-address>
+bun run --env-file .env.testing scripts/buy-token.ts --half --token <token-address>
 ```
 
 Use `--amount 10` for `/buy10x` or `--test` for `/buyTest`. Track individual purchases:
 
 ```
-bun run scripts/buy-status.ts --env-file .env.testing --reference <buy-reference>
+bun run --env-file .env.testing scripts/buy-status.ts --reference <buy-reference>
 ```
 
 # Inspect system status
@@ -78,31 +78,31 @@ bun run scripts/buy-status.ts --env-file .env.testing --reference <buy-reference
 List recent launches or inspect a specific token:
 
 ```
-bun run scripts/db-snapshot.ts --env-file .env.testing  --limit 10
-bun run scripts/db-snapshot.ts --env-file .env.testing  --token <token-address>
+bun run --env-file .env.testing scripts/db-snapshot.ts --limit 10
+bun run --env-file .env.testing scripts/db-snapshot.ts --token <token-address>
 ```
 
 Inspect queue status:
 
 ```
 # List all recent jobs (default limit 20)
-bun run scripts/queue-snapshot.ts --env-file .env.testing
+bun run --env-file .env.testing scripts/queue-snapshot.ts
 
 # List last 5 jobs
-bun run scripts/queue-snapshot.ts --env-file .env.testing --limit 5
+bun run --env-file .env.testing scripts/queue-snapshot.ts --limit 5
 
 # Filter by job status (queued, processing, completed, failed)
-bun run scripts/queue-snapshot.ts --env-file .env.testing --status queued
+bun run --env-file .env.testing scripts/queue-snapshot.ts --status queued
 
 # Filter by job kind (COIN, PURCHASE, GRADUATE, REFUND)
-bun run scripts/queue-snapshot.ts --env-file .env.testing --kind COIN
+bun run --env-file .env.testing scripts/queue-snapshot.ts --kind COIN
 ```
 
 
 ## Run operators manually
 
 ```
-bun run scripts/process-jobs.ts --env-file .env.testing  --max 1 
+bun run --env-file .env.testing scripts/process-jobs.ts --max 1
 ```
 
 This pulls up to `max` queued jobs and executes them with the same handler logic as the worker service.
@@ -110,10 +110,10 @@ This pulls up to `max` queued jobs and executes them with the same handler logic
 ## Purge items from a table
 
 To purge a launch:
-bun run scripts/purge.ts --env-file .env.testing --launch <launch-id> 
+bun run --env-file .env.testing scripts/purge.ts --launch <launch-id>
 
 To purge a purchase:
-bun run scripts/purge.ts --env-file .env.testing --purchase <purchase-id> 
+bun run --env-file .env.testing scripts/purge.ts --purchase <purchase-id> 
 
 ## Handy flags
 

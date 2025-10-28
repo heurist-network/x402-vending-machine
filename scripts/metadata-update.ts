@@ -6,7 +6,7 @@ async function main() {
   log.info({ address: account.address }, "Using wallet");
 
   const fetchWithPayment = createPaymentFetch(account);
-  const baseUrl = getApiBaseUrl(argString(args, "api"));
+  const baseUrl = getApiBaseUrl();
   const token = argString(args, "token") || process.env.TOKEN_ADDRESS || requireEnv("TOKEN_ADDRESS");
 
   // Build metadata update payload
@@ -40,7 +40,7 @@ async function main() {
 
   log.info({ token, updates: Object.keys(body).filter(k => k !== "token") }, "Calling /metadata/update");
 
-  const response = await fetchWithPayment(`${baseUrl}/metadata/update`, {
+  const response = await fetchWithPayment(`${baseUrl}/x402/metadata/update`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
