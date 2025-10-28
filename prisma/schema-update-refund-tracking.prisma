@@ -1,0 +1,54 @@
+// Enhanced Purchase table with better refund tracking
+// Add these fields to the existing Purchase model in schema.prisma
+
+model Purchase {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tokenLower    String   @map("token_lower")
+  onchainId     BigInt   @map("onchain_id")
+  payer         String
+  recipient     String
+  usdcAmount6d  BigInt   @map("usdc_amount_6d")
+  x402Nonce     String   @unique @map("x402_nonce")
+
+  // Existing purchase transaction fields
+  txHash        String?  @map("tx_hash")           // handlePurchase transaction (token delivery)
+  operator      String?                             // operator wallet that processed the purchase
+
+  // NEW: Payment tracking fields (from AuthorizationUsed event)
+  paymentTxHash String?  @map("payment_tx_hash")   // USDC ERC-3009 authorization transaction
+  paymentBlockNumber BigInt? @map("payment_block_number") // Block where payment was confirmed
+
+  // Refund tracking
+  refundTxHash  String?  @map("refund_tx_hash")    // adminRefund transaction
+
+  status        String   @default("queued")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("purchases")
+}
+
+// Alternative: Create a separate Refund table for detailed tracking
+model Refund {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  purchaseId          String   @map("purchase_id") @db.Uuid
+  x402Nonce           String   @map("x402_nonce")
+  payer               String
+  usdcAmount6d        BigInt   @map("usdc_amount_6d")
+
+  // Payment tracking
+  paymentTxHash       String   @map("payment_tx_hash")
+  paymentBlockNumber  BigInt   @map("payment_block_number")
+
+  // Refund processing
+  refundTxHash        String?  @map("refund_tx_hash")
+  refundBlockNumber   BigInt?  @map("refund_block_number")
+
+  status              String   @default("pending") // pending, processing, completed, failed
+  reason              String   // Why this needs refund
+
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
+  processedAt         DateTime? @map("processed_at") @db.Timestamptz
+
+  @@unique([purchaseId])
+  @@map("refunds")
+}

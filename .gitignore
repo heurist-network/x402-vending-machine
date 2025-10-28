@@ -141,3 +141,5 @@ vite.config.ts.timestamp-*
 .claude
 backend/
 onchain/
+*.csv
+backup.sql

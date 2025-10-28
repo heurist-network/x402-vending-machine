@@ -30,19 +30,23 @@ model Launch {
 }
 
 model Purchase {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tokenLower    String   @map("token_lower")
-  onchainId     BigInt   @map("onchain_id")
-  payer         String
-  recipient     String
-  usdcAmount6d  BigInt   @map("usdc_amount_6d")
-  x402Nonce     String   @unique @map("x402_nonce")
-  txHash        String?  @map("tx_hash")
-  refundTxHash  String?  @map("refund_tx_hash")
-  status        String   @default("queued")
-  operator      String?
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tokenLower         String    @map("token_lower")
+  onchainId          BigInt    @map("onchain_id")
+  payer              String
+  recipient          String
+  usdcAmount6d       BigInt    @map("usdc_amount_6d")
+  x402Nonce          String    @unique @map("x402_nonce")
+  txHash             String?   @map("tx_hash")
+  refundTxHash       String?   @map("refund_tx_hash")
+  paymentTxHash      String?   @map("payment_tx_hash")
+  paymentBlockNumber BigInt?   @map("payment_block_number")
+  status             String    @default("queued")
+  operator           String?
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz
 
+  @@index([paymentTxHash], map: "idx_purchases_payment_tx_hash")
+  @@index([paymentBlockNumber], map: "idx_purchases_payment_block_number")
   @@map("purchases")
 }
 

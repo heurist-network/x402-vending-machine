@@ -23,6 +23,7 @@ async function main() {
     usdcAmount6d: purchase.usdcAmount6d.toString(),
     x402Nonce: purchase.x402Nonce,
     txHash: purchase.txHash,
+    refundTxHash: purchase.refundTxHash,
     status: purchase.status,
     operator: purchase.operator,
     createdAt: purchase.createdAt
