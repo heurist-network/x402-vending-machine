@@ -31,6 +31,7 @@ export const x402EndpointSchema = {
     price: "$1.00",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: BUY_DESCRIPTION_TEMPLATE.replace("{amount}", "$1.00"),
       inputSchema: BUY_INPUT_SCHEMA
     }
@@ -40,6 +41,7 @@ export const x402EndpointSchema = {
     price: "$2.00",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: BUY_DESCRIPTION_TEMPLATE.replace("{amount}", "$2.00"),
       inputSchema: BUY_INPUT_SCHEMA
     }
@@ -49,6 +51,7 @@ export const x402EndpointSchema = {
     price: "$3.00",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: BUY_DESCRIPTION_TEMPLATE.replace("{amount}", "$3.00"),
       inputSchema: BUY_INPUT_SCHEMA
     }
@@ -58,6 +61,7 @@ export const x402EndpointSchema = {
     price: "$4.00",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: BUY_DESCRIPTION_TEMPLATE.replace("{amount}", "$4.00"),
       inputSchema: BUY_INPUT_SCHEMA
     }
@@ -67,6 +71,7 @@ export const x402EndpointSchema = {
     price: "$5.00",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: BUY_DESCRIPTION_TEMPLATE.replace("{amount}", "$5.00"),
       inputSchema: BUY_INPUT_SCHEMA
     }
@@ -76,6 +81,7 @@ export const x402EndpointSchema = {
     price: "$10.00",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: BUY_DESCRIPTION_TEMPLATE.replace("{amount}", "$10.00"),
       inputSchema: BUY_INPUT_SCHEMA
     }
@@ -85,6 +91,7 @@ export const x402EndpointSchema = {
     price: "$20.00",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: BUY_DESCRIPTION_TEMPLATE.replace("{amount}", "$20.00"),
       inputSchema: BUY_INPUT_SCHEMA
     }
@@ -94,6 +101,7 @@ export const x402EndpointSchema = {
     price: "$1.00",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: "Launch a token for testing and offer it for sale. 1 billion total supply. Sales cap is 4 USDC.",
       inputSchema: COIN_API_INPUT_SCHEMA
     }
@@ -103,6 +111,7 @@ export const x402EndpointSchema = {
     price: "$5.00",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: "Launch a token and offer it for sale. 1 billion total supply. Sales cap is 4000 USDC. Initial FDV is $5000. Name and symbol are required. Other metadata fields can always be updated by the creator with the /metadata/update endpoint later.",
       inputSchema: COIN_API_INPUT_SCHEMA
     }
@@ -112,6 +121,7 @@ export const x402EndpointSchema = {
     price: "$10.00",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: "Launch a token and offer it for sale. 1 billion total supply. Sales cap is 40000 USDC. Initial FDV is $50000. Name and symbol are required. Other metadata fields can always be updated by the creator with the /metadata/update endpoint later.",
       inputSchema: COIN_API_INPUT_SCHEMA
     }
@@ -121,6 +131,7 @@ export const x402EndpointSchema = {
     price: "$1.00",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: "Update token metadata. You must be the token creator to call this endpoint.",
       inputSchema: {
         bodyType: "json",
@@ -142,6 +153,7 @@ export const x402EndpointSchema = {
     price: "$0.01",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: "List token launches in the vending machine. Results include the token information and launch progress (amount of USDC raised, queued, and completed purchases). Useful for searching ongoing or completed launches, or to get the token information for a specific launch.",
       inputSchema: {
         bodyType: "json",
@@ -160,6 +172,7 @@ export const x402EndpointSchema = {
     price: "$0.001",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: "Get detailed information about a specific token, including launch status and purchase statistics, and token metadata.",
       inputSchema: {
         bodyType: "json",
@@ -178,6 +191,7 @@ export const x402EndpointSchema = {
     price: "$0.01",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: "Check the status of a purchase transaction.",
       inputSchema: {
         bodyType: "json",
@@ -196,6 +210,7 @@ export const x402EndpointSchema = {
     price: "$0.01",
     network: NETWORK,
     config: {
+      discoverable: true,
       description: "Check the status of a coin creation. Returns the token contract address if it has been created.",
       inputSchema: {
         bodyType: "json",
