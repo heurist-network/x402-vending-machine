@@ -56,7 +56,8 @@ This system uses an asynchronous job queue pattern to handle blockchain operatio
 8. Mark job as completed
 ```
 
-**Status Progression**: `queued` → `processing` → `active`
+**Job Queue Status Progression**: `queued` → `in_progress` → `done`
+**Launch Status Progression**: `queued` → `processing` → `active` (or `failed` if the coin transaction reverts)
 
 ---
 
@@ -96,7 +97,9 @@ This system uses an asynchronous job queue pattern to handle blockchain operatio
 11. Mark job as completed
 ```
 
-**Status Progression**:
+**Job Queue Status Progression**: `queued` → `in_progress` → `done`
+
+**Purchase Record Status Progression**:
 - Success: `queued` → `processing` → `completed`
 - Failed: `queued` → `processing` → `to_refund` (then REFUND job)
 
@@ -154,17 +157,24 @@ if (!updatedL.graduated && updatedL.usdcAccounted >= updatedL.targetUSDC) {
 
 ## Status Tracking
 
+### Job Queue Status Values
+
+| Status | Meaning |
+|--------|---------|
+| `queued` | Job is waiting to be claimed by a worker |
+| `in_progress` | Worker is currently processing the job |
+| `done` | Job finished successfully |
+| `dead` | Job exhausted retries and needs manual attention |
+
 ### Purchase Status Values
 
 | Status | Meaning |
 |--------|---------|
-| `queued` | Job enqueued, waiting for worker |
-| `processing` | Worker claimed job and is working |
+| `queued` | Purchase record created, waiting for worker |
+| `processing` | Worker claimed this purchase |
 | `completed` | Successfully processed on-chain |
 | `to_refund` | Failed validation, refund enqueued |
 | `refunded` | Refund transaction confirmed |
-| `failed` | Job failed, will retry |
-| `dead` | Max retries exceeded |
 
 ### Why "to_refund" vs "refunded"?
 
@@ -256,7 +266,7 @@ await update({ status: "refunded" }); // ✅ Now it's done
 
 ### Check Job Queue
 ```sql
-SELECT * FROM jobs WHERE status IN ('queued', 'in_progress', 'failed') ORDER BY created_at DESC;
+SELECT * FROM jobs WHERE status IN ('queued', 'in_progress') ORDER BY created_at DESC;
 ```
 
 ### Check Purchase Status
@@ -273,7 +283,7 @@ WHERE status = 'to_refund';
 ```sql
 UPDATE jobs
 SET status='queued', attempts=0, run_after=now()
-WHERE id=123 AND status='failed';
+WHERE id=123 AND status='dead';
 ```
 
 ---
