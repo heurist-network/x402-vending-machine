@@ -253,8 +253,15 @@ app.post("/x402/coin/lg", async (req, res) => {
 
 app.post("/x402/metadata/update", async (req, res) => {
   try {
-    const launchId = String(req.body?.launchId || req.body?.launch || "").trim();
-    if (!launchId) return res.status(400).json({ error: "missing_launch_id" });
+    const tokenRaw = String(req.body?.token || req.body?.tokenAddress || "").trim();
+    if (!tokenRaw) return res.status(400).json({ error: "missing_token" });
+
+    let tokenLower: string;
+    try {
+      tokenLower = toLowerAddr(tokenRaw);
+    } catch {
+      return res.status(400).json({ error: "invalid_token" });
+    }
 
     const xp = req.get("x-payment");
     if (!xp) return res.status(400).json({ error: "missing_x_payment_header" });
@@ -262,15 +269,15 @@ app.post("/x402/metadata/update", async (req, res) => {
     if (!payer) return res.status(400).json({ error: "bad_payment_payload" });
 
     const launch = await prisma.launch.findUnique({
-      where: { id: launchId },
-      select: { creator: true, name: true, symbol: true }
+      where: { tokenLower },
+      select: { id: true, creator: true, name: true, symbol: true }
     });
     if (!launch) return res.status(404).json({ error: "launch_not_found" });
     if (launch.creator.toLowerCase() !== payer.toLowerCase()) {
       return res.status(403).json({ error: "not_creator" });
     }
 
-    const key = launchMetadataKey(launchId);
+    const key = launchMetadataKey(launch.id);
     const existing = await getMetadataJson(key);
 
     const merged: any = {
@@ -292,7 +299,7 @@ app.post("/x402/metadata/update", async (req, res) => {
     const metadataUri = await uploadMetadataJson(key, merged);
 
     await prisma.launch.update({
-      where: { id: launchId },
+      where: { id: launch.id },
       data: { contractUri: metadataUri }
     });
 
