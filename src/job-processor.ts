@@ -7,6 +7,16 @@ import { initContracts, pickOperator, readLaunch } from "./web3";
 
 const defaultLog = pino({ level: process.env.LOG_LEVEL || "info" });
 
+// Manual gas limits to skip estimation and avoid RPC state lag issues
+const GAS_LIMITS = {
+  COIN: 5_000_000n,           // Token deployment + state updates
+  PURCHASE: 350_000n,         // Mint + accounting updates
+  GRADUATE: 5_000_000n,       // Swap + liquidity + mints (most complex)
+  REFUND: 200_000n            // USDC transfer + accounting
+};
+
+const FAIR_CAP = 800_000_000n * 10n ** 18n;  // Must match VendingMachine.sol FAIR_CAP
+
 export type JobProcessor = {
   process(job: any): Promise<void>;
 };
@@ -49,9 +59,9 @@ function sizeToIndex(size: string): number {
 }
 
 function getTargetUsdcForSize(sizeIndex: number): bigint {
-  if (sizeIndex === 0) return 4_500_000n; // TEST
-  if (sizeIndex === 1) return 4_500_000_000n; // S = 4500e6
-  return 45_000_000_000n; // L = 45000e6
+  if (sizeIndex === 0) return 4_000_000n; // TEST
+  if (sizeIndex === 1) return 4_000_000_000n; // S = 4000e6
+  return 40_000_000_000n; // L = 40000e6
 }
 
 function parseLaunchDataFromCoinedEvent(
@@ -169,7 +179,9 @@ async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContr
   }
   else {
     const vm = pickOperator(web3.vm, web3.operators);
-    const tx = await vm.coin(name, symbol, metadataUri, creator, sizeToIndex(size));
+    const tx = await vm.coin(name, symbol, metadataUri, creator, sizeToIndex(size), {
+      gasLimit: GAS_LIMITS.COIN
+    });
     txHash = tx.hash;
 
     // once we get the tx hash (tx not yet confirmed), we update the hash in the database
@@ -276,8 +288,6 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
     }
   }
   else {
-
-    const FAIR_CAP = 900_000_000n * 10n ** 18n;
     const remainingAllocation = FAIR_CAP - L.allocated;
     const TOKENS_PER_USDC_6D =
       L.size === 0 ? 200_000_000n * 10n ** 12n : L.size === 1 ? 200_000n * 10n ** 12n : 20_000n * 10n ** 12n;
@@ -319,7 +329,9 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
     }
 
     const vm = pickOperator(web3.vm, web3.operators);
-    const tx = await vm.handlePurchase(onchainId, purchase.recipient, usdcAmountString);
+    const tx = await vm.handlePurchase(onchainId, purchase.recipient, usdcAmountString, {
+      gasLimit: GAS_LIMITS.PURCHASE
+    });
     txHash = tx.hash;
     operatorAddr = (vm.runner as ethers.Wallet).address;
     await prisma.purchase.update({
@@ -383,9 +395,10 @@ async function handleGRADUATE(log: Logger, web3: Awaited<ReturnType<typeof initC
   const launchData = await readLaunch(web3.vm, onchainId);
   if (launchData.graduated) {
     if (launch.status !== "active" || !launch.graduated) {
+      // fix the db state. maybe onchain vs offchain state mismatch
       await prisma.launch.update({
         where: { tokenLower },
-        data: { status: "active", graduated: true }
+        data: { status: "active", graduated: true, usdcAccounted6d: 0n }
       });
     }
     log.info({ tokenLower, onchainId }, "GRADUATE already completed");
@@ -414,7 +427,9 @@ async function handleGRADUATE(log: Logger, web3: Awaited<ReturnType<typeof initC
   }
   else {
     const vm = pickOperator(web3.vm, web3.operators);
-    const tx = await vm.graduate(onchainId);
+    const tx = await vm.graduate(onchainId, {
+      gasLimit: GAS_LIMITS.GRADUATE
+    });
     txHash = tx.hash;
 
     await prisma.launch.update({
@@ -473,7 +488,9 @@ async function handleREFUND(log: Logger, web3: Awaited<ReturnType<typeof initCon
   if (!purchase.onchainId) throw new Error("refund_missing_onchain_id");
 
   const vm = web3.vm.connect(web3.admin);
-  const tx = await vm.adminRefund(purchase.payer, purchase.usdcAmount6d);
+  const tx = await vm.adminRefund(purchase.payer, purchase.usdcAmount6d, {
+    gasLimit: GAS_LIMITS.REFUND
+  });
   const txHash = tx.hash;
   await prisma.purchase.update({
     where: { id: purchaseId },

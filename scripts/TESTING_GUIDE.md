@@ -115,6 +115,58 @@ bun run --env-file .env.testing scripts/purge.ts --launch <launch-id>
 To purge a purchase:
 bun run --env-file .env.testing scripts/purge.ts --purchase <purchase-id> 
 
+## Check purchase details
+
+Query the database for a specific purchase record to inspect status, amounts, and transaction information:
+
+```bash
+
+# Check purchase by ID via CLI flag
+bun run scripts/check-purchase.ts --id 51596a2b-e9f4-444e-b53b-86e77ccf2a57
+
+# Using with env file
+bun run --env-file .env.testing scripts/check-purchase.ts --id <purchase-id>
+```
+
+## Read launch data from blockchain
+
+Query on-chain launch data directly from the smart contract including token info, creation details, funding progress, and graduation status:
+
+```bash
+bun run scripts/read-launch-onchain.ts --id 5
+
+# Using with env file
+bun run --env-file .env.testing scripts/read-launch-onchain.ts --id <onchain-id>
+```
+
+Size mappings: `0` = TEST, `1` = S (small), `2` = L (large)
+
+## Common debugging workflows
+
+After making a purchase:
+```bash
+# 1. Get the purchase reference from buy-token output
+bun run --env-file .env.testing scripts/buy-status.ts --reference <buy-reference>
+
+# 2. Once completed, check the purchase details in DB
+bun run scripts/check-purchase.ts --id <purchase-id>
+
+# 3. Verify the on-chain state was updated
+bun run scripts/read-launch-onchain.ts --id <onchain-id>
+```
+
+Debug a purchase issue:
+```bash
+# Check database record
+bun run scripts/check-purchase.ts --id <purchase-id>
+
+# Verify on-chain data matches
+bun run scripts/read-launch-onchain.ts --id <onchain-id>
+
+# Compare usdcAccounted on-chain with accumulated purchases in DB
+bun run --env-file .env.testing scripts/db-snapshot.ts --token <token-address>
+```
+
 ## Handy flags
 
 - `--api` overrides `API_BASE_URL` for a single call.
