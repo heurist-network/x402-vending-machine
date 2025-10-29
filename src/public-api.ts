@@ -115,7 +115,7 @@ app.get("/", async (req, res) => {
     }
 
     body {
-      background: #2563eb;
+      background: #2679fe;
       color: #ffffff;
       font-family: 'VT323', 'Courier New', monospace;
       font-size: 20px;
