@@ -4,13 +4,15 @@
 
 <div align="center">
 
-**Token platform for agent economy**
+### 🪙 Token Launchpad for Agent Economy
 
-[Website](https://vending-machine.heurist.xyz) • [On x402scan](https://www.x402scan.com/server/a973dd7f-e4e1-4fdc-a635-151103d27e12)
+**Turn any x402 service into an investable primitive**
+
+*Built by [Heurist](https://heurist.ai) on [x402](https://x402.org) • MIT Licensed*
+
+[Website](https://vending-machine.heurist.xyz) • [x402scan Interface](https://www.x402scan.com/server/a973dd7f-e4e1-4fdc-a635-151103d27e12)
 
 </div>
-
----
 
 ## Overview
 
@@ -74,7 +76,7 @@ When 800M tokens are sold, the contract automatically executes:
 
 </details>
 
-<details>
+<details open>
 <summary><b>Phase 3: Refund (If Unsuccessful)</b></summary>
 
 If 800M tokens are not sold within 14 days:
@@ -90,40 +92,40 @@ Three core contracts work together to enable trustless token launches:
 
 <table>
 <tr>
-<td width="33%">
+<td width="33%" valign="top">
 
-### 📋 VendingMachine
-**Central Controller**
+**📋 VendingMachine**
+*Central Controller*
 
-- Deploys tokens
-- Tracks allocations
-- Mints to buyers
-- Triggers graduation
-- Manages refunds
-
-</td>
-<td width="33%">
-
-### 💰 TreasuryVault
-**Payment Receiver**
-
-- Receives USDC
-- Swaps to HEU
-- Creates liquidity
-- Burns LP tokens
-- Zero admin keys
+• Deploys tokens
+• Tracks allocations
+• Mints to buyers
+• Triggers graduation
+• Manages refunds
 
 </td>
-<td width="33%">
+<td width="33%" valign="top">
 
-### 🪙 X402Token
-**Tradeable Asset**
+**💰 TreasuryVault**
+*Payment Receiver*
 
-- ERC-20 token
-- ERC-3009 (gasless)
-- ERC-7572 (metadata)
-- Transfer lock
-- 1B fixed supply
+• Receives USDC
+• Swaps to HEU
+• Creates liquidity
+• Burns LP tokens
+• Zero admin keys
+
+</td>
+<td width="33%" valign="top">
+
+**🪙 X402Token**
+*Tradeable Asset*
+
+• ERC-20 token
+• ERC-3009 (gasless)
+• ERC-7572 (metadata)
+• Transfer lock
+• 1B fixed supply
 
 </td>
 </tr>
@@ -163,9 +165,7 @@ sequenceDiagram
     Note over X402Token: Now tradeable on Uniswap
 ```
 
----
-
-### 1️⃣ VendingMachine.sol
+### 📋 VendingMachine.sol
 **The Central Controller**
 
 The main factory and orchestrator of the entire system. Manages launching, accounting, token minting, refunding, and graduation.
@@ -183,13 +183,13 @@ The main factory and orchestrator of the entire system. Manages launching, accou
 - Tokens are non-transferable until graduation
 - **Automatic graduation** when 800M tokens are sold
 
-### 2️⃣ X402Token.sol
+### 🪙 X402Token.sol
 **The Tradeable Asset**
 
 An enhanced [ERC-20](https://eips.ethereum.org/EIPS/eip-20) token optimized for agent commerce.
 
 **Specifications:**
-- **Supply:** 1 billion tokens (fixed, no inflation)
+- **Supply:** 1 billion tokens (fixed)
 - **[ERC-3009](https://eips.ethereum.org/EIPS/eip-3009):** Gasless transfers via cryptographic signatures
 - **[ERC-7572](https://eips.ethereum.org/EIPS/eip-7572):** Customizable metadata (token icon, social links, descriptions)
 - **Transfer Lock:** Disabled until graduation
@@ -199,7 +199,7 @@ Every token launched can serve as both:
 1. An investable asset (tradeable on Uniswap V2 post-graduation)
 2. A payment token in x402 flows
 
-### 3️⃣ TreasuryVault.sol
+### 💰 TreasuryVault.sol
 **The Payment Receiver**
 
 A minimal, trustless vault that holds funds and executes swaps.
@@ -214,8 +214,6 @@ A minimal, trustless vault that holds funds and executes swaps.
 - Zero admin keys
 - Only callable by VendingMachine
 - Pure code execution, no human intervention possible
-
----
 
 ## Off-Chain Infrastructure
 
@@ -236,42 +234,16 @@ The off-chain infrastructure bridges x402 payments with on-chain contract execut
 
 1. **Payment Reception** → x402 payment verified via Coinbase facilitator
 2. **Job Queue** → Transactions enqueued for async processing
-3. **On-Chain Execution** → Operator wallets execute contract calls
-4. **State Validation** → Always reads fresh on-chain data to prevent race conditions
+3. **Onchain Execution** → Operator wallets execute contract calls
+4. **State Validation** → Always reads fresh onchain data to prevent race conditions
 
 The system automatically triggers graduation when targets are reached and ensures no overselling through continuous validation.
-
-## Detailed Launch Flow
-
-### Step 1: Coin
-A user or agent calls the `/coin` x402 API endpoint with token name and metadata. The system deploys an ERC-20 token contract with transfers disabled.
-
-### Step 2: Sale Period (14 Days)
-Buyers pay USDC via x402 protocol and receive tokens immediately to their wallets. Tokens are non-transferable during this phase, preventing pre-market manipulation.
-
-### Step 3: Graduation (Automatic)
-When 800M tokens (80% of supply) are sold, the contract automatically executes:
-
-1. Swaps accumulated USDC → HEU via Uniswap V3
-2. Creates Token/HEU liquidity pair on Uniswap V2
-3. Burns LP tokens permanently (rugpull protection)
-4. Enables token transfers
-5. Token becomes freely tradable on Uniswap
-
-### Step 4: Refund (If Unsuccessful)
-If the 800M target isn't reached within 14 days:
-
-- All buyers receive proportional USDC refunds
-- Tokens are burned from user wallets
-- No capital loss for participants
-
----
 
 ## Contract Addresses
 
 ### Base Mainnet
 
-<details>
+<details open>
 <summary><b>Core System Contracts</b></summary>
 
 | Contract | Address | Description |
@@ -281,7 +253,7 @@ If the 800M target isn't reached within 14 days:
 
 </details>
 
-<details>
+<details open>
 <summary><b>Token Contracts</b></summary>
 
 | Token | Address | Decimals |
@@ -291,7 +263,7 @@ If the 800M target isn't reached within 14 days:
 
 </details>
 
-<details>
+<details open>
 <summary><b>Uniswap Infrastructure</b></summary>
 
 | Protocol | Address | Purpose |
@@ -346,29 +318,15 @@ Not one global agent economy, but a Cambrian explosion of micro-economies:
 - Capital and agents flowing to where they create most value
 - A decentralized, permissionless economy at machine scale
 
-## Technical Features
+## Open Source
 
-### ERC-3009: Built for Agent Payments
-Every token deployed through the Vending Machine implements **ERC-3009 (Transfer With Authorization)**:
-- ⚡ **Gasless transfers** via cryptographic signatures
-- 🤖 **Agents can authorize payments** without holding ETH for gas
-- 🔗 **Native compatibility** with x402 payment flows
-- 🚀 **Enables atomic, frictionless** agent-to-agent commerce
+All **[smart contracts](./contracts)** are open source and licensed under **[MIT License](https://opensource.org/licenses/MIT)**.
 
-### Security & Trustlessness
-| Feature | Implementation | Benefit |
-|---------|---------------|---------|
-| **Immutable Contracts** | No upgrade keys, no admin functions | Code cannot change post-deployment |
-| **Burned LP Tokens** | Automatic burn at graduation | Rugpulls mathematically impossible |
-| **No Admin Keys** | TreasuryVault has zero privileged access | Pure code execution, no human intervention |
-| **On-chain Verification** | All state transitions emit events | Full transparency and auditability |
-
-### Open Source
-All **[smart contracts](./contracts)** are open source and available in this repository.
-
-Audit the code. Verify the logic. Fork and modify. This is open infrastructure for the agent economy.
-
----
+**Key Security Features:**
+- ✅ **Immutable Contracts** - No upgrade keys or admin functions
+- ✅ **Burned LP Tokens** - Automatic burn at graduation (rugpulls impossible)
+- ✅ **Zero Admin Keys** - TreasuryVault has no privileged access
+- ✅ **Onchain Verification** - All state transitions emit events 
 
 ## Getting Started
 
@@ -394,36 +352,36 @@ Discover and invest in agent services:
 Integrate the Vending Machine into your applications:
 
 - **API Endpoints:** `/coin`, `/buy`, `/buy10x`, `/launches`, `/tokenDetails`
-- **Smart Contracts:** `VendingMachine`, `TreasuryVault`, `X402Token` - Browse this repository
-
----
+- **Smart Contracts:** `VendingMachine.sol`, `TreasuryVault.sol`, `X402Token.sol` - See **[contracts](./contracts)**
 
 ## Additional Resources
 
 <table>
 <tr>
-<td>
+<td valign="top">
 
-### 📦 Platform
-- **[Website](https://vending-machine.heurist.xyz)**
+**📦 Platform**
+
+• **[Website](https://vending-machine.heurist.xyz)**
   View the user interface guide (Frontend Terminal Coming Soon)
-- **[x402scan](https://www.x402scan.com/server/a973dd7f-e4e1-4fdc-a635-151103d27e12)**
+
+• **[x402scan](https://www.x402scan.com/server/a973dd7f-e4e1-4fdc-a635-151103d27e12)**
   Interact with the Vending Machine via API endpoints
 
 </td>
-<td>
+<td valign="top">
 
-### 📚 Documentation
-- **[x402 Documentation](https://x402.gitbook.io/x402)**
+**📚 Documentation**
+
+• **[x402 Documentation](https://x402.gitbook.io/x402)**
   Learn about the payment protocol
-- **[Smart Contracts](./contracts)**
+
+• **[Smart Contracts](./contracts)**
   Browse open source contracts
 
 </td>
 </tr>
 </table>
-
----
 
 ## Summary
 
@@ -432,8 +390,6 @@ The agent economy generates real revenue through x402. The missing piece was val
 x402 Vending Machine provides that primitive. It's infrastructure for sovereign sub-economies where agents coordinate, transact, and build together.
 
 Thousands of these economies will emerge, each optimized for different purposes, all interoperating through cryptographic protocols.
-
----
 
 ## Contact & Support
 
