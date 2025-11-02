@@ -4,7 +4,7 @@
 
 <div align="center">
 
-### 🪙 Token Launchpad for Agent Economy
+### Token Launchpad for Agent Economy
 
 **Turn any x402 service into an investable primitive**
 
@@ -16,14 +16,12 @@
 
 ## Overview
 
-In May 2024, Coinbase activated HTTP 402 "Payment Required" - a status code reserved since 1997. The [x402 protocol](https://x402.org) now enables real commerce at machine scale, with autonomous agents processing roughly 500,000 API calls daily and services generating thousands in monthly revenue through atomic, cryptographically-signed settlements.
-
 **x402 Vending Machine** transforms any x402 service into an **investable primitive**. It enables:
 
-- 🪙 **Token launches** with standardized economics
-- 💰 **Capital raising** through x402 protocol
-- 👥 **Community ownership** and upside participation
-- 🔒 **Trustless liquidity** provision
+- **Token launches** with standardized economics
+- **Capital raising** through x402 protocol
+- **Community ownership** and upside participation
+- **Trustless liquidity** provision
 
 > **Lifecycle:** `Coin → Sell → Graduate → Trade`
 >
@@ -72,7 +70,7 @@ When 800M tokens are sold, the contract automatically executes:
 3. Burns LP tokens permanently (eliminates rugpull risk)
 4. Enables token transfers
 
-> ⚡ **No human intervention required.** The contract executes immutably and transparently.
+> **No human intervention required.** The contract executes immutably and transparently.
 
 </details>
 
@@ -94,7 +92,7 @@ Three core contracts work together to enable trustless token launches:
 <tr>
 <td width="33%" valign="top">
 
-**📋 VendingMachine**
+**VendingMachine**
 *Central Controller*
 
 • Deploys tokens
@@ -106,7 +104,7 @@ Three core contracts work together to enable trustless token launches:
 </td>
 <td width="33%" valign="top">
 
-**💰 TreasuryVault**
+**TreasuryVault**
 *Payment Receiver*
 
 • Receives USDC
@@ -118,7 +116,7 @@ Three core contracts work together to enable trustless token launches:
 </td>
 <td width="33%" valign="top">
 
-**🪙 X402Token**
+**X402Token**
 *Tradeable Asset*
 
 • ERC-20 token
@@ -165,7 +163,7 @@ sequenceDiagram
     Note over X402Token: Now tradeable on Uniswap
 ```
 
-### 📋 VendingMachine.sol
+### VendingMachine.sol
 **The Central Controller**
 
 The main factory and orchestrator of the entire system. Manages launching, accounting, token minting, refunding, and graduation.
@@ -183,7 +181,7 @@ The main factory and orchestrator of the entire system. Manages launching, accou
 - Tokens are non-transferable until graduation
 - **Automatic graduation** when 800M tokens are sold
 
-### 🪙 X402Token.sol
+### X402Token.sol
 **The Tradeable Asset**
 
 An enhanced [ERC-20](https://eips.ethereum.org/EIPS/eip-20) token optimized for agent commerce.
@@ -199,7 +197,7 @@ Every token launched can serve as both:
 1. An investable asset (tradeable on Uniswap V2 post-graduation)
 2. A payment token in x402 flows
 
-### 💰 TreasuryVault.sol
+### TreasuryVault.sol
 **The Payment Receiver**
 
 A minimal, trustless vault that holds funds and executes swaps.
@@ -330,7 +328,7 @@ All **[smart contracts](./contracts)** are open source and licensed under **[MIT
 
 ## Getting Started
 
-### 🎯 For Service Creators
+### For Service Creators
 Launch a token for your x402 service:
 
 1. Visit the x402scan api explorer at **[x402scan](https://www.x402scan.com/server/a973dd7f-e4e1-4fdc-a635-151103d27e12)**
@@ -339,7 +337,7 @@ Launch a token for your x402 service:
 4. Deploy via x402 protocol
 5. Share with your community and start raising capital
 
-### 💼 For Investors & Users
+### For Investors & Users
 Discover and invest in agent services:
 
 1. Interact with launch api endpoints on **[x402scan](https://www.x402scan.com/server/a973dd7f-e4e1-4fdc-a635-151103d27e12)**
@@ -348,7 +346,7 @@ Discover and invest in agent services:
 4. Hold during the 14-day sale period
 5. Trade on Uniswap V2 after graduation
 
-### 🛠️ For Developers
+### For Developers
 Integrate the Vending Machine into your applications:
 
 - **API Endpoints:** `/coin`, `/buy`, `/buy10x`, `/launches`, `/tokenDetails`
@@ -360,7 +358,7 @@ Integrate the Vending Machine into your applications:
 <tr>
 <td valign="top">
 
-**📦 Platform**
+**Platform**
 
 • **[Website](https://vending-machine.heurist.xyz)**
   View the user interface guide (Frontend Terminal Coming Soon)
@@ -371,7 +369,7 @@ Integrate the Vending Machine into your applications:
 </td>
 <td valign="top">
 
-**📚 Documentation**
+**Documentation**
 
 • **[x402 Documentation](https://x402.gitbook.io/x402)**
   Learn about the payment protocol
