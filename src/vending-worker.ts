@@ -8,7 +8,7 @@ const PROCESS_ID = `vm-process-${process.pid}`;
 
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY || "2");
 const IDLE_DELAY_MS = Number(process.env.WORKER_IDLE_DELAY_MS || "500");
-const JOB_LEASE_MS = Number(process.env.JOB_LEASE_MS || "300000");
+const JOB_LEASE_MS = Number(process.env.JOB_LEASE_MS || "600000");
 const WATCHDOG_INTERVAL_MS = Number(process.env.WATCHDOG_INTERVAL_MS || "60000");
 
 log.info({ PROCESS_ID, CONCURRENCY, IDLE_DELAY_MS, JOB_LEASE_MS, WATCHDOG_INTERVAL_MS }, "Worker started");

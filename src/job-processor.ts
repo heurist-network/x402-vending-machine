@@ -267,6 +267,14 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
     });
   }
 
+  if (prevStatus === "processing") {
+    if (!purchase.txHash) { // Check if txHash exists before doing expensive blockchain reads
+      log.info({ purchaseId }, "Purchase already being processed by another worker, skipping");
+      return;
+    }
+    // If txHash exists, continue to idempotency logic below
+  }
+
   let txHash: string | undefined = job.payload.txHash || purchase.txHash || undefined;
   let operatorAddr: string | undefined = job.payload.operator || purchase.operator || undefined;
   let receipt: any;
@@ -324,7 +332,7 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
         tokenLower,
         payer: purchase.payer,
         usdcAmount6d: usdcAmountString
-      }, undefined, 3);
+      }, undefined, 1);
       return;
     }
 
@@ -350,33 +358,37 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
   const purchaseEvent = parsePurchaseDataFromReceipt(receipt, iface, onchainId);
   if (!purchaseEvent) throw new Error(`PurchaseRecorded event not found for purchase ID ${purchaseId} with tx hash ${txHash}`);
 
-  // Calculate new usdcAccounted based on event data + previous state
-  const newUsdcAccounted = L.usdcAccounted + purchaseEvent.usdcAmount;
-
-  await prisma.$transaction([
-    prisma.purchase.update({
+  const updatedLaunch = await prisma.$transaction(async (tx) => {
+    await tx.purchase.update({
       where: { id: purchaseId },
       data: {
         status: "completed",
       }
-    }),
-    prisma.launch.update({
+    });
+
+    return await tx.launch.update({
       where: { tokenLower },
       data: {
         usdcQueued6d: { decrement: usdcAmountBigInt },
-        usdcAccounted6d: newUsdcAccounted,
+        usdcAccounted6d: { increment: usdcAmountBigInt },
+      },
+      select: {
+        usdcAccounted6d: true,
+        targetUsdc6d: true,
+        graduated: true
       }
-    })
-  ]);
+    });
+  });
 
-  log.info({ 
-    tokenLower, 
-    onchainId, 
-    usdcAccounted: ethers.formatUnits(newUsdcAccounted, 6),
-    targetUSDC: ethers.formatUnits(L.targetUSDC, 6)
+  log.info({
+    tokenLower,
+    onchainId,
+    usdcAccounted: ethers.formatUnits(updatedLaunch.usdcAccounted6d ?? 0n, 6),
+    targetUSDC: ethers.formatUnits(updatedLaunch.targetUsdc6d ?? 0n, 6)
   }, "PURCHASE completed");
 
-  if (!L.graduated && newUsdcAccounted >= L.targetUSDC) {
+  // Check if we've reached the target and should graduate (use fresh DB value, not stale blockchain value)
+  if (!updatedLaunch.graduated && (updatedLaunch.usdcAccounted6d ?? 0n) >= (updatedLaunch.targetUsdc6d ?? 0n)) {
     await enqueueJob("GRADUATE", `grad:${tokenLower}`, { tokenLower }, undefined, 3);
     log.info({ tokenLower, onchainId }, "Auto-enqueued GRADUATE job - target USDC reached");
   }

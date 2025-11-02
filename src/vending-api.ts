@@ -106,7 +106,7 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
         tokenLower,
         payer,
         usdcAmount6d: value.toString()
-      }, undefined, 3);
+      }, undefined, 1);
 
       return res.json({
         ok: true,
@@ -120,7 +120,7 @@ async function handleBuy(req: any, res: any, expectedUsdcAmount: bigint) {
       tokenLower,
       recipient: actualRecipient,
       usdcAmount6d: value.toString()
-    }, undefined, 3);
+    }, undefined, 1);
 
     return res.json({
       ok: true,
@@ -228,7 +228,7 @@ async function handleCoin(req: any, res: any, size: "TEST" | "S" | "L") {
       size,
       creator,
       metadataUri
-    }, undefined, 3);
+    }, undefined, 1);
 
     res.json({ ok: true, reference: launch.id, metadataUri, notes: "The token will be created shortly. You can call /coin_status to check the status." });
   } catch (e) {
@@ -498,22 +498,45 @@ app.post("/x402/coin_status", async (req, res) => {
     const reference = String(req.body?.reference || "");
     if (!reference) return res.status(400).json({ error: "missing_reference" });
 
-    const launch = await prisma.launch.findUnique({
-      where: { id: reference },
-      select: {
-        status: true,
-        name: true,
-        symbol: true,
-        size: true,
-        creator: true,
-        tokenLower: true,
-        onchainId: true,
-        txHash: true,
-        error: true,
-        createdAt: true,
-        graduated: true
-      }
-    });
+    // Support both UUID (launch ID) and token address
+    let launch;
+    if (reference.startsWith("0x") && reference.length === 42) {
+      // Token address provided
+      launch = await prisma.launch.findUnique({
+        where: { tokenLower: reference.toLowerCase() },
+        select: {
+          status: true,
+          name: true,
+          symbol: true,
+          size: true,
+          creator: true,
+          tokenLower: true,
+          onchainId: true,
+          txHash: true,
+          error: true,
+          createdAt: true,
+          graduated: true
+        }
+      });
+    } else {
+      // Launch ID (UUID) provided
+      launch = await prisma.launch.findUnique({
+        where: { id: reference },
+        select: {
+          status: true,
+          name: true,
+          symbol: true,
+          size: true,
+          creator: true,
+          tokenLower: true,
+          onchainId: true,
+          txHash: true,
+          error: true,
+          createdAt: true,
+          graduated: true
+        }
+      });
+    }
 
     if (!launch) {
       return res.status(404).json({ error: "launch_not_found" });

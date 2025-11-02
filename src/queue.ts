@@ -91,7 +91,7 @@ export async function releaseStaleJobs(leaseMs: number) {
       lockedAt: { lt: cutoff }
     },
     data: {
-      status: "queued",
+      status: "dead",
       lockedBy: null,
       lockedAt: null,
       runAfter: new Date()
