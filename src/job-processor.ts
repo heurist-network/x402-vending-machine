@@ -4,6 +4,8 @@ import { ethers } from "ethers";
 import { prisma } from "./db";
 import { enqueueJob } from "./queue";
 import { initContracts, pickOperator, readLaunch } from "./web3";
+import { NotificationType } from "./notification-types";
+import { notify } from "./notification-manager";
 
 const defaultLog = pino({ level: process.env.LOG_LEVEL || "info" });
 
@@ -387,6 +389,16 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
     targetUSDC: ethers.formatUnits(updatedLaunch.targetUsdc6d ?? 0n, 6)
   }, "PURCHASE completed");
 
+  const salePercentage = Number((updatedLaunch.usdcAccounted6d ?? 0n) * 100n / (updatedLaunch.targetUsdc6d ?? 1n));
+
+  if (salePercentage >= 50) {
+    await notify(tokenLower, NotificationType.Purchase50Percent);
+  }
+
+  if (salePercentage >= 90) {
+    await notify(tokenLower, NotificationType.Purchase90Percent);
+  }
+
   // Check if we've reached the target and should graduate (use fresh DB value, not stale blockchain value)
   if (!updatedLaunch.graduated && (updatedLaunch.usdcAccounted6d ?? 0n) >= (updatedLaunch.targetUsdc6d ?? 0n)) {
     await enqueueJob("GRADUATE", `grad:${tokenLower}`, { tokenLower }, undefined, 3);
@@ -470,6 +482,8 @@ async function handleGRADUATE(log: Logger, web3: Awaited<ReturnType<typeof initC
       usdcAccounted6d: 0n
     }
   });
+
+  await notify(tokenLower, NotificationType.Graduation);
 
   log.info({ tokenLower, onchainId }, "GRADUATE done");
 }
