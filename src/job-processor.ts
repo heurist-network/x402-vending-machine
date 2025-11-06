@@ -389,13 +389,18 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
     targetUSDC: ethers.formatUnits(updatedLaunch.targetUsdc6d ?? 0n, 6)
   }, "PURCHASE completed");
 
-  const salePercentage = Number((updatedLaunch.usdcAccounted6d ?? 0n) * 100n / (updatedLaunch.targetUsdc6d ?? 1n));
+  const currentUsdcAccounted = updatedLaunch.usdcAccounted6d ?? 0n;
+  const previousUsdcAccounted = currentUsdcAccounted - usdcAmountBigInt;
+  const targetUsdc = updatedLaunch.targetUsdc6d ?? 1n;
 
-  if (salePercentage >= 50) {
+  const previousPercentage = Number(previousUsdcAccounted * 100n / targetUsdc);
+  const currentPercentage = Number(currentUsdcAccounted * 100n / targetUsdc);
+
+  if (previousPercentage < 50 && currentPercentage >= 50) {
     await notify(tokenLower, NotificationType.Purchase50Percent);
   }
 
-  if (salePercentage >= 90) {
+  if (previousPercentage < 90 && currentPercentage >= 90) {
     await notify(tokenLower, NotificationType.Purchase90Percent);
   }
 
