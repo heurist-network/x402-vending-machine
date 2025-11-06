@@ -7,6 +7,7 @@
     "public-api": "bun src/public-api.ts",
     "internal-api": "bun src/internal-api.ts",
     "worker": "bun src/vending-worker.ts",
+    "test:notifications": "bun src/test-notifications.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:studio": "prisma studio"
