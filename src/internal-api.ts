@@ -25,6 +25,10 @@ const swaggerOptions = {
     },
     servers: [
       {
+        url: "/",
+        description: "Current server- swagger test"
+      },
+      {
         url: "http://localhost:8081",
         description: "Local development server"
       }
@@ -50,10 +54,20 @@ const swaggerOptions = {
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
 
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:3000";
-app.use(cors({
-  origin: FRONTEND_ORIGIN.split(",").map(origin => origin.trim()),
-  credentials: true
-}));
+const ALLOW_ALL_CORS = process.env.ALLOW_ALL_CORS === "true";
+
+if (ALLOW_ALL_CORS) {
+  // Allow all origins (for development/Swagger testing)
+  app.use(cors({
+    origin: "*",
+    credentials: false
+  }));
+} else {
+  app.use(cors({
+    origin: FRONTEND_ORIGIN.split(",").map(origin => origin.trim()),
+    credentials: true
+  }));
+}
 
 app.use(express.json({ limit: "1mb" }));
 
