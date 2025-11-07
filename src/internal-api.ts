@@ -7,6 +7,17 @@ import NodeCache from "node-cache";
 import { prisma } from "./db.js";
 import swaggerUi from "swagger-ui-express";
 import swaggerJsdoc from "swagger-jsdoc";
+import {
+  LaunchStatus,
+  LaunchResponse,
+  TokenDetailResponse,
+  LaunchesResponse,
+  PlatformStatsResponse,
+  FacilitatorHealthResponse,
+  ContractUriData,
+  PurchaseStats,
+  SaleInfo,
+} from "./api-types.js";
 
 const log = pino({ level: process.env.LOG_LEVEL || "info" });
 const app = express();
@@ -113,57 +124,39 @@ async function generateCDPBearerToken(method: string, host: string, path: string
 /**
  * Determine launch status based on graduated flag and creation date
  */
-function getLaunchStatus(launch: any): "open" | "graduated" | "refundable" {
+function getLaunchStatus(launch: any): LaunchStatus {
   if (launch.graduated) {
-    return "graduated";
+    return LaunchStatus.graduated;
   }
 
   const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
   if (launch.createdAt < fourteenDaysAgo) {
-    return "refundable";
+    return LaunchStatus.refundable;
   }
 
-  return "open";
+  return LaunchStatus.open;
 }
 
 /**
- * Fetch and parse metadata from contractUri JSON
+ * Fetch entire contract URI data (R2 file)
  */
-async function fetchMetadata(contractUri: string | null) {
-  const defaultMetadata = {
-    description: "",
-    website: "",
-    twitter: "",
-    telegram: ""
-  };
-
+async function fetchContractUriData(contractUri: string | null): Promise<ContractUriData | null> {
   if (!contractUri) {
-    return defaultMetadata;
+    return null;
   }
 
-  try {
-    const response = await fetch(contractUri, { signal: AbortSignal.timeout(3000) });
-    if (!response.ok) {
-      return defaultMetadata;
-    }
-
-    const data = await response.json() as any;
-    return {
-      description: data.description || "",
-      website: data.website || "",
-      twitter: data.twitter || "",
-      telegram: data.telegram || ""
-    };
-  } catch (err) {
-    log.warn({ err, contractUri }, "Failed to fetch metadata");
-    return defaultMetadata;
+  const response = await fetch(contractUri, { signal: AbortSignal.timeout(3000) });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch contract URI: ${response.status}`);
   }
+
+  return await response.json() as ContractUriData;
 }
 
 /**
  * Get purchase statistics for a token
  */
-async function getPurchaseStats(tokenAddress: string) {
+async function getPurchaseStats(tokenAddress: string): Promise<PurchaseStats> {
   const [completed, queued] = await Promise.all([
     prisma.purchase.count({
       where: {
@@ -188,39 +181,54 @@ async function getPurchaseStats(tokenAddress: string) {
 /**
  * Format a launch for API response with all required fields
  */
-async function formatLaunchForResponse(launch: any, includeStats = false, includeMetadata = false) {
+async function formatLaunchForResponse(
+  launch: any,
+  includeStats: true,
+  includeMetadata: true
+): Promise<TokenDetailResponse>;
+async function formatLaunchForResponse(
+  launch: any,
+  includeStats?: boolean,
+  includeMetadata?: boolean
+): Promise<LaunchResponse>;
+async function formatLaunchForResponse(
+  launch: any,
+  includeStats = false,
+  includeMetadata = false
+): Promise<LaunchResponse | TokenDetailResponse> {
   const status = getLaunchStatus(launch);
 
   const currentUSDC = launch.usdcAccounted6d || BigInt(0);
   const targetUSDC = launch.targetUsdc6d || BigInt(1);
   const percent = Number((currentUSDC * BigInt(10000) / targetUSDC)) / 100;
 
-  const imageUrl = launch.contractUri
-    ? `${launch.contractUri.replace('.json', '')}/image.png`
-    : null;
+  const contractUriData = includeMetadata ? await fetchContractUriData(launch.contractUri) : null;
 
-  const baseResponse: any = {
+  const sale: SaleInfo = {
+    currentUSDC: (Number(currentUSDC) / 1_000_000).toFixed(2),
+    targetUSDC: (Number(targetUSDC) / 1_000_000).toFixed(2),
+    percent: Math.min(percent, 100).toFixed(2)
+  };
+
+  const baseResponse: LaunchResponse = {
     name: launch.name,
     symbol: launch.symbol,
     tokenAddress: launch.tokenLower || "",
     creatorAddress: launch.creator,
-    imageUrl,
     createdAt: launch.createdAt.toISOString(),
     status,
-    sale: {
-      currentUSDC: (Number(currentUSDC) / 1_000_000).toFixed(2),
-      targetUSDC: (Number(targetUSDC) / 1_000_000).toFixed(2),
-      percent: Math.min(percent, 100).toFixed(2)
-    },
+    sale,
     marketCap: "0"
   };
 
-  if (includeMetadata) {
-    baseResponse.metadata = await fetchMetadata(launch.contractUri);
-  }
-
-  if (includeStats && launch.tokenLower) {
-    baseResponse.stats = await getPurchaseStats(launch.tokenLower);
+  if (includeMetadata && includeStats && launch.tokenLower) {
+    const stats = await getPurchaseStats(launch.tokenLower);
+    const detailResponse: TokenDetailResponse = {
+      ...baseResponse,
+      contractUriData,
+      stats
+    };
+    return detailResponse;
   }
 
   return baseResponse;
@@ -352,7 +360,7 @@ app.get("/v1/launches", async (req, res) => {
 
     const cacheKey = `launches:${status || "all"}:${q || ""}:${pageNum}:${limitNum}`;
 
-    const result = await cacheSWR(cacheKey, async () => {
+    const result = await cacheSWR<LaunchesResponse>(cacheKey, async () => {
       const where: any = {};
 
       if (q && typeof q === "string" && q.trim()) {
@@ -387,7 +395,7 @@ app.get("/v1/launches", async (req, res) => {
         }
       }
 
-      return {
+      const response: LaunchesResponse = {
         data: formattedLaunches,
         pagination: {
           currentPage: pageNum,
@@ -395,6 +403,7 @@ app.get("/v1/launches", async (req, res) => {
           totalPages: Math.ceil(totalCount / limitNum)
         }
       };
+      return response;
     });
 
     res.json(result);
@@ -435,7 +444,7 @@ app.get("/v1/token/:address", async (req, res) => {
 
     const cacheKey = `token:${address.toLowerCase()}`;
 
-    const result = await cacheSWR(cacheKey, async () => {
+    const result = await cacheSWR<TokenDetailResponse | null>(cacheKey, async () => {
       const launch = await prisma.launch.findUnique({
         where: { tokenLower: address.toLowerCase() }
       });
@@ -495,7 +504,7 @@ app.get("/v1/stats", async (_req, res) => {
   try {
     const cacheKey = "platform:stats";
 
-    const result = await cacheSWR(cacheKey, async () => {
+    const result = await cacheSWR<PlatformStatsResponse>(cacheKey, async () => {
       const launches = await prisma.launch.findMany({
         select: {
           graduated: true,
@@ -511,12 +520,13 @@ app.get("/v1/stats", async (_req, res) => {
         .filter(l => l.graduated)
         .reduce((sum, l) => sum + Number(l.usdcAccounted6d || BigInt(0)), 0);
 
-      return {
+      const stats: PlatformStatsResponse = {
         totalRaisedUSDC: (totalRaisedUSDC / 1_000_000).toFixed(2),
         totalLaunches,
         graduatedLaunches,
         openLaunches
       };
+      return stats;
     }, 300);
 
     res.json(result);
@@ -545,54 +555,25 @@ app.get("/v1/stats", async (_req, res) => {
  *         description: Health check failed
  */
 app.get("/internal/facilitator_health", async (_req, res) => {
-  try {
-    const host = "api.cdp.coinbase.com";
-    const path = "/platform/v2/x402/supported";
-    const method = "GET";
-    const bearerToken = await generateCDPBearerToken(method, host, path);
+  const host = "api.cdp.coinbase.com";
+  const path = "/platform/v2/x402/supported";
+  const method = "GET";
+  const bearerToken = await generateCDPBearerToken(method, host, path);
 
-    const response = await fetch(`https://api.cdp.coinbase.com${path}`, {
-      method: method,
-      headers: {
-        "Authorization": `Bearer ${bearerToken}`,
-        "Content-Type": "application/json"
-      }
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      log.error({ status: response.status, error: errorText }, "CDP API error");
-      return res.status(503).json({
-        healthy: false,
-        status: "error",
-        message: `CDP API returned ${response.status}`,
-        details: errorText
-      });
+  const response = await fetch(`https://api.cdp.coinbase.com${path}`, {
+    method: method,
+    headers: {
+      "Authorization": `Bearer ${bearerToken}`,
+      "Content-Type": "application/json"
     }
+  });
 
-    const data = await response.json() as any;
-    log.info({ data }, "CDP facilitator response");
-
-    // The CDP API returns { kinds: [...] } with supported payment schemes
-    const kinds = data?.kinds || [];
-    const isHealthy = Array.isArray(kinds) && kinds.length > 0;
-
-    return res.json({
-      healthy: isHealthy,
-      status: isHealthy ? "operational" : "degraded",
-      facilitator: "coinbase",
-      supported_payment_schemes: kinds,
-      timestamp: new Date().toISOString()
-    });
-  } catch (e) {
-    log.error({ err: e }, "facilitator_health check failed");
-    return res.status(500).json({
-      healthy: false,
-      status: "error",
-      message: "Failed to check facilitator health",
-      error: e instanceof Error ? e.message : String(e)
-    });
+  if (!response.ok) {
+    throw new Error(`CDP API returned ${response.status}`);
   }
+
+  const data = await response.json() as FacilitatorHealthResponse;
+  res.json(data);
 });
 
 const INTERNAL_PORT = process.env.INTERNAL_PORT || 8081;
