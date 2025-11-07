@@ -5,9 +5,49 @@ import { generateJwt } from "@coinbase/cdp-sdk/auth";
 import rateLimit from "express-rate-limit";
 import NodeCache from "node-cache";
 import { prisma } from "./db.js";
+import swaggerUi from "swagger-ui-express";
+import swaggerJsdoc from "swagger-jsdoc";
 
 const log = pino({ level: process.env.LOG_LEVEL || "info" });
 const app = express();
+
+const swaggerOptions = {
+  definition: {
+    openapi: "3.0.0",
+    info: {
+      title: "Vending Machine Internal API",
+      version: "1.0.0",
+      description: "Read-only BFF API for token launches with pagination, filtering, and search",
+      contact: {
+        name: "Heurist AI",
+        url: "https://heurist.ai"
+      }
+    },
+    servers: [
+      {
+        url: "http://localhost:8081",
+        description: "Local development server"
+      }
+    ],
+    tags: [
+      {
+        name: "Launches",
+        description: "Token launch endpoints"
+      },
+      {
+        name: "Stats",
+        description: "Platform statistics"
+      },
+      {
+        name: "Health",
+        description: "Health check endpoints"
+      }
+    ]
+  },
+  apis: ["./src/internal-api.ts"]
+};
+
+const swaggerSpec = swaggerJsdoc(swaggerOptions);
 
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:3000";
 app.use(cors({
@@ -196,16 +236,97 @@ async function cacheSWR<T>(key: string, fetchFn: () => Promise<T>, ttl = 15): Pr
   return fresh;
 }
 
+// Swagger UI
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: "Vending Machine API Docs"
+}));
+
 /**
- * GET /v1/launches
- *
- * Paginated, searchable, filterable list of token launches
- *
- * Query params:
- *   - status: Filter by status (open, graduated, refundable)
- *   - q: Search by name, symbol, or address
- *   - page: Page number (default: 1)
- *   - limit: Items per page (default: 50, max: 100)
+ * @swagger
+ * /v1/launches:
+ *   get:
+ *     summary: Get all token launches
+ *     description: Paginated, searchable, and filterable list of all token launches
+ *     tags: [Launches]
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [open, graduated, refundable]
+ *         description: Filter by launch status
+ *       - in: query
+ *         name: q
+ *         schema:
+ *           type: string
+ *         description: Search by name, symbol, or token address
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           default: 1
+ *         description: Page number
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *           default: 50
+ *         description: Items per page
+ *     responses:
+ *       200:
+ *         description: List of token launches
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       name:
+ *                         type: string
+ *                       symbol:
+ *                         type: string
+ *                       tokenAddress:
+ *                         type: string
+ *                       creatorAddress:
+ *                         type: string
+ *                       imageUrl:
+ *                         type: string
+ *                       createdAt:
+ *                         type: string
+ *                         format: date-time
+ *                       status:
+ *                         type: string
+ *                         enum: [open, graduated, refundable]
+ *                       sale:
+ *                         type: object
+ *                         properties:
+ *                           currentUSDC:
+ *                             type: string
+ *                           targetUSDC:
+ *                             type: string
+ *                           percent:
+ *                             type: string
+ *                       marketCap:
+ *                         type: string
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     currentPage:
+ *                       type: integer
+ *                     totalItems:
+ *                       type: integer
+ *                     totalPages:
+ *                       type: integer
+ *       500:
+ *         description: Internal server error
  */
 app.get("/v1/launches", async (req, res) => {
   try {
@@ -273,9 +394,26 @@ app.get("/v1/launches", async (req, res) => {
 });
 
 /**
- * GET /v1/token/:address
- *
- * Detailed information for a single token
+ * @swagger
+ * /v1/token/{address}:
+ *   get:
+ *     summary: Get token details
+ *     description: Detailed information for a single token including metadata and purchase statistics
+ *     tags: [Launches]
+ *     parameters:
+ *       - in: path
+ *         name: address
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Token contract address
+ *     responses:
+ *       200:
+ *         description: Token details with metadata and stats
+ *       404:
+ *         description: Token not found
+ *       500:
+ *         description: Internal server error
  */
 app.get("/v1/token/:address", async (req, res) => {
   try {
@@ -310,9 +448,34 @@ app.get("/v1/token/:address", async (req, res) => {
 });
 
 /**
- * GET /v1/stats
- *
- * Platform-wide statistics
+ * @swagger
+ * /v1/stats:
+ *   get:
+ *     summary: Get platform statistics
+ *     description: Platform-wide statistics including total launches and raised funds
+ *     tags: [Stats]
+ *     responses:
+ *       200:
+ *         description: Platform statistics
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 totalRaisedUSDC:
+ *                   type: string
+ *                   description: Total USDC raised from graduated launches
+ *                 totalLaunches:
+ *                   type: integer
+ *                   description: Total number of launches
+ *                 graduatedLaunches:
+ *                   type: integer
+ *                   description: Number of graduated launches
+ *                 openLaunches:
+ *                   type: integer
+ *                   description: Number of open launches
+ *       500:
+ *         description: Internal server error
  */
 app.get("/v1/stats", async (_req, res) => {
   try {
@@ -353,9 +516,19 @@ app.get("/v1/stats", async (_req, res) => {
 });
 
 /**
- * GET /internal/facilitator_health
- *
- * Check Coinbase CDP x402 facilitator health
+ * @swagger
+ * /internal/facilitator_health:
+ *   get:
+ *     summary: Check facilitator health
+ *     description: Check if the Coinbase CDP x402 facilitator is functioning
+ *     tags: [Health]
+ *     responses:
+ *       200:
+ *         description: Facilitator is healthy
+ *       503:
+ *         description: Facilitator is unhealthy
+ *       500:
+ *         description: Health check failed
  */
 app.get("/internal/facilitator_health", async (_req, res) => {
   try {
