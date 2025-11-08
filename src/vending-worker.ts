@@ -10,8 +10,9 @@ const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY || "2");
 const IDLE_DELAY_MS = Number(process.env.WORKER_IDLE_DELAY_MS || "500");
 const JOB_LEASE_MS = Number(process.env.JOB_LEASE_MS || "600000");
 const WATCHDOG_INTERVAL_MS = Number(process.env.WATCHDOG_INTERVAL_MS || "60000");
+const RECONCILE_INTERVAL_MS = Number(process.env.RECONCILE_INTERVAL_MS || "60000");
 
-log.info({ PROCESS_ID, CONCURRENCY, IDLE_DELAY_MS, JOB_LEASE_MS, WATCHDOG_INTERVAL_MS }, "Worker started");
+log.info({ PROCESS_ID, CONCURRENCY, IDLE_DELAY_MS, JOB_LEASE_MS, WATCHDOG_INTERVAL_MS, RECONCILE_INTERVAL_MS }, "Worker started");
 
 const processorPromise = buildJobProcessor(log);
 
@@ -71,4 +72,14 @@ if (WATCHDOG_INTERVAL_MS > 0 && JOB_LEASE_MS > 0) {
         log.error({ err }, "Watchdog failed");
       });
   }, WATCHDOG_INTERVAL_MS).unref?.();
+}
+
+if (RECONCILE_INTERVAL_MS > 0) {
+  setInterval(() => {
+    processorPromise
+      .then((processor) => processor.reconcileBroadcastedPurchases())
+      .catch((err) => {
+        log.error({ err }, "Reconcile pass failed");
+      });
+  }, RECONCILE_INTERVAL_MS).unref?.();
 }

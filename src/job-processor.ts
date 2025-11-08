@@ -21,6 +21,7 @@ const FAIR_CAP = 800_000_000n * 10n ** 18n;  // Must match VendingMachine.sol FA
 
 export type JobProcessor = {
   process(job: any): Promise<void>;
+  reconcileBroadcastedPurchases(limit?: number): Promise<void>;
 };
 
 function sleep(ms: number) {
@@ -134,6 +135,89 @@ function parseGraduatedEventFromReceipt(
     heuOut: parsed.args.heuOut,
     lpBurned: parsed.args.lpBurned
   };
+}
+
+type PurchaseFinalizeInput = {
+  purchaseId: string;
+  tokenLower: string;
+  onchainId: number;
+  usdcAmountBigInt: bigint;
+  source?: "worker" | "reconcile";
+};
+
+async function finalizePurchaseFromReceipt(
+  log: Logger,
+  web3: Awaited<ReturnType<typeof initContracts>>,
+  input: PurchaseFinalizeInput,
+  receipt: any
+) {
+  const { purchaseId, tokenLower, onchainId, usdcAmountBigInt, source = "worker" } = input;
+  const iface = web3.vm.interface;
+  const purchaseEvent = parsePurchaseDataFromReceipt(receipt, iface, onchainId);
+  if (!purchaseEvent) {
+    throw new Error(`PurchaseRecorded event not found for purchase ID ${purchaseId} with tx hash ${receipt?.hash ?? "unknown"}`);
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const updated = await tx.purchase.updateMany({
+      where: { id: purchaseId, status: "processing" },
+      data: { status: "completed" }
+    });
+
+    if (updated.count === 0) {
+      return { didUpdate: false };
+    }
+
+    const launch = await tx.launch.update({
+      where: { tokenLower },
+      data: {
+        usdcQueued6d: { decrement: usdcAmountBigInt },
+        usdcAccounted6d: { increment: usdcAmountBigInt }
+      },
+      select: {
+        usdcAccounted6d: true,
+        targetUsdc6d: true,
+        graduated: true
+      }
+    });
+
+    return { didUpdate: true, launch };
+  });
+
+  const launchSnapshot = result.launch;
+  if (!result.didUpdate) {
+    log.info({ purchaseId }, "Purchase already reconciled");
+    return;
+  }
+  if (!launchSnapshot) return;
+
+  const currentUsdcAccounted = launchSnapshot.usdcAccounted6d ?? 0n;
+  const previousUsdcAccounted = currentUsdcAccounted - usdcAmountBigInt;
+  const targetUsdc = launchSnapshot.targetUsdc6d ?? 1n;
+
+  log.info({
+    tokenLower,
+    onchainId,
+    purchaseId,
+    usdcAccounted: ethers.formatUnits(currentUsdcAccounted, 6),
+    targetUSDC: ethers.formatUnits(targetUsdc, 6)
+  }, source === "reconcile" ? "PURCHASE reconciled from persisted tx hash" : "PURCHASE completed by worker");
+
+  const previousPercentage = Number(previousUsdcAccounted * 100n / targetUsdc);
+  const currentPercentage = Number(currentUsdcAccounted * 100n / targetUsdc);
+
+  if (previousPercentage < 50 && currentPercentage >= 50) {
+    await notify(tokenLower, NotificationType.Purchase50Percent);
+  }
+
+  if (previousPercentage < 90 && currentPercentage >= 90) {
+    await notify(tokenLower, NotificationType.Purchase90Percent);
+  }
+
+  if (!launchSnapshot.graduated && currentUsdcAccounted >= (launchSnapshot.targetUsdc6d ?? 0n)) {
+    await enqueueJob("GRADUATE", `grad:${tokenLower}`, { tokenLower }, undefined, 3);
+    log.info({ tokenLower, onchainId }, "Auto-enqueued GRADUATE job - target USDC reached");
+  }
 }
 
 async function handleCOIN(log: Logger, web3: Awaited<ReturnType<typeof initContracts>>, job: any) {
@@ -356,59 +440,12 @@ async function handlePURCHASE(log: Logger, web3: Awaited<ReturnType<typeof initC
     if (receipt.status !== 1) throw new Error(`purchase_tx_failed for purchase ID ${purchaseId} with tx hash ${txHash}`);
   }
 
-  const iface = web3.vm.interface;
-  const purchaseEvent = parsePurchaseDataFromReceipt(receipt, iface, onchainId);
-  if (!purchaseEvent) throw new Error(`PurchaseRecorded event not found for purchase ID ${purchaseId} with tx hash ${txHash}`);
-
-  const updatedLaunch = await prisma.$transaction(async (tx) => {
-    await tx.purchase.update({
-      where: { id: purchaseId },
-      data: {
-        status: "completed",
-      }
-    });
-
-    return await tx.launch.update({
-      where: { tokenLower },
-      data: {
-        usdcQueued6d: { decrement: usdcAmountBigInt },
-        usdcAccounted6d: { increment: usdcAmountBigInt },
-      },
-      select: {
-        usdcAccounted6d: true,
-        targetUsdc6d: true,
-        graduated: true
-      }
-    });
-  });
-
-  log.info({
-    tokenLower,
-    onchainId,
-    usdcAccounted: ethers.formatUnits(updatedLaunch.usdcAccounted6d ?? 0n, 6),
-    targetUSDC: ethers.formatUnits(updatedLaunch.targetUsdc6d ?? 0n, 6)
-  }, "PURCHASE completed");
-
-  const currentUsdcAccounted = updatedLaunch.usdcAccounted6d ?? 0n;
-  const previousUsdcAccounted = currentUsdcAccounted - usdcAmountBigInt;
-  const targetUsdc = updatedLaunch.targetUsdc6d ?? 1n;
-
-  const previousPercentage = Number(previousUsdcAccounted * 100n / targetUsdc);
-  const currentPercentage = Number(currentUsdcAccounted * 100n / targetUsdc);
-
-  if (previousPercentage < 50 && currentPercentage >= 50) {
-    await notify(tokenLower, NotificationType.Purchase50Percent);
-  }
-
-  if (previousPercentage < 90 && currentPercentage >= 90) {
-    await notify(tokenLower, NotificationType.Purchase90Percent);
-  }
-
-  // Check if we've reached the target and should graduate (use fresh DB value, not stale blockchain value)
-  if (!updatedLaunch.graduated && (updatedLaunch.usdcAccounted6d ?? 0n) >= (updatedLaunch.targetUsdc6d ?? 0n)) {
-    await enqueueJob("GRADUATE", `grad:${tokenLower}`, { tokenLower }, undefined, 3);
-    log.info({ tokenLower, onchainId }, "Auto-enqueued GRADUATE job - target USDC reached");
-  }
+  await finalizePurchaseFromReceipt(
+    log,
+    web3,
+    { purchaseId, tokenLower, onchainId, usdcAmountBigInt },
+    receipt
+  );
 }
 
 async function handleGRADUATE(log: Logger, web3: Awaited<ReturnType<typeof initContracts>>, job: any) {
@@ -538,6 +575,69 @@ async function handleREFUND(log: Logger, web3: Awaited<ReturnType<typeof initCon
   log.info({ purchaseId }, "REFUND done");
 }
 
+async function reconcileBroadcastedPurchases(
+  log: Logger,
+  web3: Awaited<ReturnType<typeof initContracts>>,
+  limit = 5
+) {
+  const normalizedLimit = Math.max(1, Math.min(Number(limit) || 5, 20));
+  const stuckPurchases = await prisma.purchase.findMany({
+    where: {
+      status: "processing",
+      txHash: { not: null }
+    },
+    orderBy: { createdAt: "asc" },
+    take: normalizedLimit,
+    select: {
+      id: true,
+      tokenLower: true,
+      onchainId: true,
+      usdcAmount6d: true,
+      txHash: true
+    }
+  });
+
+  if (!stuckPurchases.length) {
+    log.debug("No purchases requiring reconciliation");
+    return;
+  }
+
+  for (const stuck of stuckPurchases) {
+    if (!stuck.txHash) continue;
+    if (!stuck.onchainId) {
+      log.warn({ purchaseId: stuck.id }, "Skipping reconciliation - missing onchain id");
+      continue;
+    }
+
+    try {
+      const receipt = await web3.provider.getTransactionReceipt(stuck.txHash);
+      if (!receipt) {
+        log.info({ purchaseId: stuck.id }, "Reconciliation - receipt not yet available");
+        continue;
+      }
+      if (receipt.status !== 1) {
+        log.error({ purchaseId: stuck.id, txHash: stuck.txHash }, "Reconciliation found failed purchase tx");
+        continue;
+      }
+
+      await finalizePurchaseFromReceipt(
+        log,
+        web3,
+        {
+          purchaseId: stuck.id,
+          tokenLower: stuck.tokenLower,
+          onchainId: Number(stuck.onchainId),
+          usdcAmountBigInt: stuck.usdcAmount6d,
+          source: "reconcile"
+        },
+        receipt
+      );
+    } catch (err) {
+      log.error({ err, purchaseId: stuck.id }, "Failed to reconcile purchase");
+    }
+  }
+}
+
 export async function buildJobProcessor(logger: Logger = defaultLog): Promise<JobProcessor> {
   const web3 = await initContracts();
 
@@ -551,6 +651,9 @@ export async function buildJobProcessor(logger: Logger = defaultLog): Promise<Jo
         return;
       }
       logger.warn({ kind: job.kind }, "Unknown job kind");
+    },
+    async reconcileBroadcastedPurchases(limit?: number) {
+      await reconcileBroadcastedPurchases(logger, web3, limit);
     }
   };
 }

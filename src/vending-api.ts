@@ -27,9 +27,8 @@ const web3Promise = initContracts();
 app.use(paymentMiddleware(
   PAY_TO,
   x402EndpointSchema,
-  // use 'facilitator' for coinbase facilitator
   {
-    url: 'https://facilitator.x402.rs',
+    url: 'https://facilitator.heurist.xyz',
   }
 ));
 
