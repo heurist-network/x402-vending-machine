@@ -1,10 +1,31 @@
 # Refund Processing System
 
-Complete 4-step workflow to identify, track, and process refunds when x402 payments succeed but token delivery fails.
+Complete 5-step workflow to identify, track, and process refunds when x402 payments succeed but token delivery fails.
 
 ---
 
-## The 4-Step Process
+## The 5-Step Process
+
+### Step 0: Find Token Block Range (one-time per token)
+
+Identify the exact block range for your token launch to optimize blockchain scanning:
+
+```bash
+# Find Coined and Graduated blocks for a token
+bun run scripts/refund/find-token-event-blocks.ts --token=0xYourTokenAddress
+
+# With custom start block
+bun run scripts/refund/find-token-event-blocks.ts --token=0xYourTokenAddress --start-block=37000000
+```
+
+**Output**:
+- Coined block (when token was launched)
+- Graduated block (if token graduated)
+- Suggested START_BLOCK and END_BLOCK values
+
+**Next**: Update the configuration in `backfill-payment-tracking.ts` and `identify-refund-discrepancies.ts`:
+
+---
 
 ### Step 1: Backfill Payment Data (one-time)
 
@@ -27,8 +48,14 @@ bun run scripts/refund/backfill-payment-tracking.ts
 Find purchases where payment was made but tokens weren't delivered:
 
 ```bash
-bun run scripts/refund/identify-refund-discrepancies.ts
+# Required: specify token address
+bun run scripts/refund/identify-refund-discrepancies.ts --token=0xYourTokenAddress
+
+# With custom block range
+bun run scripts/refund/identify-refund-discrepancies.ts --token=0xYourTokenAddress --start-block=37625000 --end-block=37647991
 ```
+
+**IMPORTANT**: You MUST specify `--token` parameter to analyze a specific token. This prevents false positives when the database contains purchases for multiple tokens.
 
 **Output:**
 - Summary with $ amounts by status
@@ -42,18 +69,30 @@ bun run scripts/refund/identify-refund-discrepancies.ts
 
 ---
 
+### Step 2.5 (Optional): Remove Policy Violators
+
+Prevent refunds for addresses that violated policy (bot users, automated purchases):
+
+```bash
+# Edit script, add addresses to POLICY_VIOLATORS array, then:
+bun run scripts/refund/mark-policy-violators-completed.ts --dry-run true  # Preview
+bun run scripts/refund/mark-policy-violators-completed.ts                 # Execute
+```
+
+**What it does:** Finds purchases (status: `to_refund`, `queued`, `processing`) from violating addresses and marks them as `completed` to prevent refunds. Associated REFUND jobs are marked as `dead`.
+
+---
+
 ### Step 3: Enqueue REFUND Jobs
 
 Create REFUND jobs for purchases that need them (from CSV):
 
 ```bash
 # Preview
-bun run scripts/refund/enqueue-refunds-from-csv.ts \
-  --csv refund-discrepancies.csv --dry-run true
+bun run scripts/refund/enqueue-refunds-from-csv.ts --dry-run true --csv refund-discrepancies.csv
 
 # Execute
-bun run scripts/refund/enqueue-refunds-from-csv.ts \
-  --csv refund-discrepancies.csv
+bun run scripts/refund/enqueue-refunds-from-csv.ts --csv refund-discrepancies.csv
 ```
 
 **What it does:**
@@ -72,17 +111,17 @@ Execute on-chain refunds using standalone refund processor:
 
 ```bash
 # Test first (no blockchain transactions)
-bun run scripts/refund/process-refunds.ts --dry-run true --max 5
+bun run scripts/refund/process-refunds.ts --token=0xYourTokenAddress --dry-run true --max 5
 
 # Execute refunds (start small!)
-bun run scripts/refund/process-refunds.ts --max 5
+bun run scripts/refund/process-refunds.ts --token=0xYourTokenAddress --max 5
 
 # Process more
-bun run scripts/refund/process-refunds.ts --max 20
+bun run scripts/refund/process-refunds.ts --token=0xYourTokenAddress --max 20
 ```
 
 **What it does:**
-1. Claims REFUND jobs from queue
+1. Claims REFUND jobs from queue for the specified token
 2. Calls `adminRefund(payer, usdcAmount)` on VendingMachine
 3. Updates purchase with `refund_tx_hash`
 4. Waits for confirmation
@@ -90,6 +129,7 @@ bun run scripts/refund/process-refunds.ts --max 20
 6. Marks job as `done`
 
 **Parameters:**
+- `--token`: Token address (required)
 - `--dry-run true`: Preview without executing
 - `--max N`: Process at most N jobs
 
@@ -121,10 +161,15 @@ GROUP BY status;
 ## Complete Example
 
 ```bash
-# 1. One-time setup
+# 0. One-time setup
 source .env
 psql "$DATABASE_URL" < prisma/migrations/complete_purchases_schema.sql
 npx prisma generate
+
+# 1. Find token block range (first time for each token)
+bun run scripts/refund/find-token-event-blocks.ts --token=0xYourTokenAddress
+# Output: START_BLOCK = 37653276, END_BLOCK = 37800000
+# Update the constants in backfill-payment-tracking.ts and identify-refund-discrepancies.ts
 
 # 2. Backfill payment data
 bun run scripts/refund/backfill-payment-tracking.ts

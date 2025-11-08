@@ -3,21 +3,34 @@ import { prisma } from "../../src/db";
 import { log, parseArgs, argString } from "../script-utils";
 import { writeFile } from "fs/promises";
 import { join } from "path";
+import { queryAuthorizationUsedEvents, type AuthorizationEvent } from "./payment-tracking-utils";
 
-const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-const DEFAULT_START_BLOCK = 37434263;
-const BLOCK_RANGE = 500; // Query in chunks to avoid RPC limits
+/**
+ * CONFIGURATION: Set the block range and token address for your specific token launch
+ * Use scripts/refund/find-token-event-blocks.ts to find the correct range
+ *
+ * CACHING: Results are cached in .cache/refund/ directory based on block range.
+ * If you run this script with the same block range as backfill-payment-tracking.ts,
+ * the cached data will be reused for faster execution.
+ *
+ * IMPORTANT: You MUST specify --token parameter to analyze a specific token.
+ * This prevents false positives when the database contains purchases for multiple tokens.
+ */
+
+// ============================================================================
+// CONFIGURATION - Update these for your specific token/launch
+// ============================================================================
+const START_BLOCK = 37650103;  // Start from token Coined event block
+const END_BLOCK: number | undefined = 37656382;  // Set to Graduated block, or undefined for current block
+const TOKEN_ADDRESS: string | undefined = "0x5630CBC7D5e085dC45f521f2Ef19698Cbc294c9b";  // Token address to analyze, or undefined to use --token CLI arg
+
+// ============================================================================
+// Constants
+// ============================================================================
+const BLOCK_RANGE = 100; // Query in chunks to avoid RPC limits
 
 // Event signatures
-const AUTHORIZATION_USED_SIG = "AuthorizationUsed(address,bytes32)";
 const PURCHASE_RECORDED_SIG = "PurchaseRecorded(uint256,address,uint256,uint256)";
-
-type AuthorizationEvent = {
-  authorizer: string;
-  nonce: string;
-  transactionHash: string;
-  blockNumber: number;
-};
 
 type PurchaseRecordedEvent = {
   id: bigint;
@@ -56,65 +69,7 @@ type AnalysisSummary = {
   usdcByStatus: Record<string, bigint>;
 };
 
-async function queryAuthorizationUsedEvents(
-  provider: ethers.JsonRpcProvider,
-  fromBlock: number,
-  toBlock: number | string,
-  nonces: string[]
-): Promise<Map<string, AuthorizationEvent>> {
-  log.info({ fromBlock, toBlock, nonceCount: nonces.length }, "Querying AuthorizationUsed events...");
-
-  const topic0 = ethers.id(AUTHORIZATION_USED_SIG);
-  const authEvents = new Map<string, AuthorizationEvent>();
-  const nonceSet = new Set(nonces.map(n => n.toLowerCase()));
-
-  // Query all AuthorizationUsed events in block range, then filter
-  // This is more efficient than querying each nonce individually
-
-  for (let start = fromBlock; start <= (typeof toBlock === "number" ? toBlock : fromBlock); start += BLOCK_RANGE) {
-    const end = Math.min(start + BLOCK_RANGE - 1, typeof toBlock === "number" ? toBlock : start + BLOCK_RANGE - 1);
-
-    log.info({ progress: `Block ${start} to ${end}` }, "Querying AuthorizationUsed events...");
-
-    const filter = {
-      address: USDC_BASE,
-      topics: [topic0],
-      fromBlock: start,
-      toBlock: end,
-    };
-
-    try {
-      const logs = await provider.getLogs(filter);
-
-      for (const logItem of logs) {
-        const nonce = logItem.topics[2].toLowerCase(); // nonce is topic[2]
-        const authorizer = ethers.getAddress("0x" + logItem.topics[1].slice(26)); // authorizer is topic[1]
-
-        // Only include if nonce is in our list
-        if (!nonceSet.has(nonce)) continue;
-
-        authEvents.set(nonce, {
-          authorizer,
-          nonce,
-          transactionHash: logItem.transactionHash,
-          blockNumber: logItem.blockNumber,
-        });
-      }
-
-      log.info({ blockRange: `${start}-${end}`, eventsFound: logs.length, matched: authEvents.size }, "Batch completed");
-    } catch (err) {
-      log.error({ err, blockRange: `${start}-${end}` }, "Failed to query AuthorizationUsed batch");
-      throw err;
-    }
-
-    // If we're using "latest", break after first iteration
-    if (typeof toBlock === "string") break;
-  }
-
-  log.info({ count: authEvents.size }, "AuthorizationUsed events retrieved");
-  return authEvents;
-}
-
+// group purchase events by buyer address (recipient address)
 async function queryPurchaseRecordedEvents(
   provider: ethers.JsonRpcProvider,
   vendingMachineAddress: string,
@@ -193,7 +148,8 @@ async function queryPurchaseRecordedEvents(
 
 async function identifyDiscrepancies(
   startBlock: number,
-  endBlock?: number
+  endBlock: number | undefined,
+  tokenAddress: string
 ): Promise<{ candidates: RefundCandidate[]; summary: AnalysisSummary }> {
   const rpcUrl = process.env.RPC_URL_BASE;
   const vendingMachineAddress = process.env.VENDING_MACHINE_ADDRESS;
@@ -204,14 +160,17 @@ async function identifyDiscrepancies(
   const provider = new ethers.JsonRpcProvider(rpcUrl);
   const currentBlock = endBlock || await provider.getBlockNumber();
 
-  log.info({ currentBlock, startBlock }, "Fetching purchases from database...");
+  log.info({ currentBlock, startBlock, tokenAddress }, "Fetching purchases from database...");
 
-  // Get all purchases from DB
+  // Get purchases from DB for the specific token only
   const purchases = await prisma.purchase.findMany({
+    where: {
+      tokenLower: tokenAddress
+    },
     orderBy: { createdAt: "asc" },
   });
 
-  log.info({ count: purchases.length }, "Purchases retrieved from database");
+  log.info({ count: purchases.length, tokenAddress }, "Purchases retrieved from database for token");
 
   // Check how many purchases already have payment tracking info
   const withPaymentInfo = purchases.filter(p => p.paymentTxHash && p.paymentBlockNumber);
@@ -278,13 +237,14 @@ async function identifyDiscrepancies(
     .map(p => p.x402Nonce);
 
   if (noncesToQuery.length > 0) {
-    log.info({ count: noncesToQuery.length }, "Querying blockchain for missing payment info");
+    log.info({ count: noncesToQuery.length }, "Querying blockchain for missing payment info (with caching)");
 
     const queriedAuthEvents = await queryAuthorizationUsedEvents(
       provider,
       startBlock,
       currentBlock,
-      noncesToQuery
+      noncesToQuery,
+      true  // Enable caching
     );
 
     // Merge with existing
@@ -493,27 +453,54 @@ async function main() {
   const outputPath = argString(args, "output") || "refund-discrepancies.csv";
   const startBlockArg = argString(args, "start-block");
   const endBlockArg = argString(args, "end-block");
+  const tokenArg = argString(args, "token");
 
-  const startBlock = startBlockArg ? parseInt(startBlockArg, 10) : DEFAULT_START_BLOCK;
-  const endBlock = endBlockArg ? parseInt(endBlockArg, 10) : undefined;
+  // Priority: CLI args > script constants
+  let startBlock: number;
+  let endBlock: number | undefined;
+  let tokenAddress: string;
 
-  if (isNaN(startBlock)) {
-    log.error("Invalid start-block argument");
+  if (startBlockArg) {
+    startBlock = parseInt(startBlockArg, 10);
+    if (isNaN(startBlock)) {
+      log.error("Invalid start-block argument");
+      process.exit(1);
+    }
+  } else {
+    startBlock = START_BLOCK;
+  }
+
+  if (endBlockArg) {
+    endBlock = parseInt(endBlockArg, 10);
+    if (isNaN(endBlock)) {
+      log.error("Invalid end-block argument");
+      process.exit(1);
+    }
+  } else {
+    endBlock = END_BLOCK;
+  }
+
+  if (tokenArg) {
+    tokenAddress = tokenArg.toLowerCase();
+  } else if (TOKEN_ADDRESS) {
+    tokenAddress = TOKEN_ADDRESS.toLowerCase();
+  } else {
+    console.error("Error: --token argument is required");
+    console.log("\nUsage:");
+    console.log("  bun run scripts/refund/identify-refund-discrepancies.ts --token=0x1234...");
+    console.log("  bun run scripts/refund/identify-refund-discrepancies.ts --token=0x1234... --start-block=37625000 --end-block=37647991");
+    console.log("\nAlternatively, set TOKEN_ADDRESS constant at the top of the script.");
     process.exit(1);
   }
 
-  if (endBlockArg && isNaN(endBlock!)) {
-    log.error("Invalid end-block argument");
-    process.exit(1);
-  }
-
-  log.info({ startBlock, endBlock: endBlock || "latest", outputPath }, "Starting refund discrepancy analysis...");
+  log.info({ startBlock, endBlock: endBlock || "latest", tokenAddress, outputPath }, "Starting refund discrepancy analysis...");
 
   try {
-    const { candidates, summary } = await identifyDiscrepancies(startBlock, endBlock);
+    const { candidates, summary } = await identifyDiscrepancies(startBlock, endBlock, tokenAddress);
 
     // Print summary
     console.log("\n=== REFUND DISCREPANCY ANALYSIS SUMMARY ===\n");
+    console.log(`Token: ${tokenAddress}`);
     console.log(`Block range: ${summary.startBlock} to ${summary.endBlock}`);
     console.log(`Total refund candidates: ${summary.totalCandidates}`);
     console.log(`Total USDC amount: $${(parseFloat(summary.totalUsdcAmount.toString()) / 1e6).toFixed(2)}\n`);

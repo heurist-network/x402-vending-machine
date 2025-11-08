@@ -3,12 +3,16 @@ import { prisma } from "../../src/db";
 import { log, parseArgs, argString } from "../script-utils";
 
 /**
- * Standalone script to process REFUND jobs
+ * Standalone script to process REFUND jobs for a specific token
  *
  * This script:
- * 1. Claims REFUND jobs from the queue
+ * 1. Claims REFUND jobs from the queue for a specific token
  * 2. Calls adminRefund on the VendingMachine contract
  * 3. Updates purchase status to 'refunded'
+ *
+ * Usage:
+ *   bun run scripts/refund/process-refunds.ts --token=0x1234... --dry-run true --max 5
+ *   bun run scripts/refund/process-refunds.ts --token=0x1234... --max 10
  *
  * Supports dry-run mode for testing without actual blockchain transactions
  */
@@ -27,6 +31,14 @@ type RefundJob = {
   status: string;
 };
 
+type SkipAction = "release" | "mark_done";
+
+type ProcessResult = {
+  skipped: boolean;
+  reason?: string;
+  action?: SkipAction;
+};
+
 let currentNonce = 0;
 
 // Get contract setup
@@ -42,8 +54,8 @@ const provider = new ethers.JsonRpcProvider(rpcUrl);
 const adminWallet = new ethers.Wallet(adminKey, provider);
 const vm = new ethers.Contract(vmAddress, VM_ABI, adminWallet);
 
-async function processRefund(job: RefundJob, dryRun: boolean): Promise<void> {
-  const { purchaseId, payer, usdcAmount6d } = job.payload;
+async function processRefund(job: RefundJob, dryRun: boolean, filterTokenAddress?: string): Promise<ProcessResult> {
+  const { purchaseId, payer, usdcAmount6d, tokenLower } = job.payload;
 
   if (!purchaseId) throw new Error("refund_purchase_id_missing");
   if (!payer) throw new Error("refund_payer_missing");
@@ -64,16 +76,22 @@ async function processRefund(job: RefundJob, dryRun: boolean): Promise<void> {
 
   if (!purchase) throw new Error("purchase_not_found");
 
-  // Validate status
-  if (purchase.status !== "to_refund") {
-    log.info({ purchaseId, status: purchase.status }, "Skipping refund - incorrect status");
-    return;
+  // Filter by token address if specified
+  if (filterTokenAddress && purchase.tokenLower !== filterTokenAddress.toLowerCase()) {
+    log.info({ purchaseId, purchaseToken: purchase.tokenLower, filterToken: filterTokenAddress }, "Skipping refund - token mismatch");
+    return { skipped: true, reason: `token is ${purchase.tokenLower}`, action: "release" };
   }
 
-  // Check if already refunded
+  // Check if already refunded (has tx hash) Mark as done since refund was already executed
   if (purchase.refundTxHash) {
     log.warn({ purchaseId, refundTxHash: purchase.refundTxHash }, "Purchase already has refundTxHash");
-    return;
+    return { skipped: true, reason: "already has refundTxHash", action: "mark_done" };
+  }
+
+  // Validate status - must be "to_refund" If status is completed/refunded/failed/etc, no refund is needed - mark job as done
+  if (purchase.status !== "to_refund") {
+    log.info({ purchaseId, status: purchase.status }, "Skipping refund - incorrect status");
+    return { skipped: true, reason: `status is ${purchase.status}`, action: "mark_done" };
   }
 
   const usdcDecimal = (parseFloat(usdcAmount6d) / 1e6).toFixed(2);
@@ -81,13 +99,11 @@ async function processRefund(job: RefundJob, dryRun: boolean): Promise<void> {
 
   if (dryRun) {
     console.log(`\n[DRY RUN] Would refund:`);
-    console.log(`  Purchase ID: ${purchaseId}`);
     console.log(`  Payer: ${payer}`);
     console.log(`  Amount: $${usdcDecimal} (${usdcAmount6d} USDC 6d)`);
     console.log(`  Token: ${purchase.tokenLower}`);
-    console.log(`  x402 Nonce: ${purchase.x402Nonce}`);
     console.log();
-    return;
+    return { skipped: false };
   }
 
   // Execute refund
@@ -109,7 +125,6 @@ async function processRefund(job: RefundJob, dryRun: boolean): Promise<void> {
     data: { refundTxHash: txHash }
   });
 
-  // Wait for confirmation
   log.info({ purchaseId, txHash }, "Waiting for confirmation...");
   const receipt = await tx.wait();
 
@@ -124,6 +139,7 @@ async function processRefund(job: RefundJob, dryRun: boolean): Promise<void> {
   });
 
   log.info({ purchaseId, txHash, blockNumber: receipt.blockNumber }, "REFUND completed successfully");
+  return { skipped: false };
 }
 
 async function claimRefundJob(workerId: string): Promise<RefundJob | null> {
@@ -153,10 +169,7 @@ async function claimRefundJob(workerId: string): Promise<RefundJob | null> {
     }
   });
 
-  if (updated.count === 0) {
-    // Job was claimed by another worker
-    return null;
-  }
+  if (updated.count === 0) return null; // Job was claimed by another worker
 
   return job as RefundJob;
 }
@@ -181,17 +194,40 @@ async function finishJob(jobId: bigint, success: boolean, error?: any): Promise<
   }
 }
 
+async function releaseJob(jobId: bigint): Promise<void> {
+  // Release the job back to queued status without marking as dead
+  await prisma.job.update({
+    where: { id: jobId },
+    data: {
+      status: "queued",
+      lockedBy: null,
+      lockedAt: null
+    }
+  });
+}
+
 async function main() {
   const args = parseArgs();
   const maxJobs = parseInt(argString(args, "max") || "10", 10);
   const dryRun = argString(args, "dry-run") === "true";
+  const tokenArg = argString(args, "token");
   const workerId = `refund-processor-${Date.now()}`;
+
+  if (!tokenArg) {
+    console.error("Error: --token argument is required");
+    console.log("\nUsage:");
+    console.log("  bun run scripts/refund/process-refunds.ts --token=0x1234... --dry-run true --max 5");
+    console.log("  bun run scripts/refund/process-refunds.ts --token=0x1234... --max 10");
+    process.exit(1);
+  }
+
+  const tokenAddress = tokenArg.toLowerCase();
 
   if (dryRun) {
     console.log("\n🔍 DRY RUN MODE - No blockchain transactions will be executed\n");
   }
 
-  log.info({ maxJobs, dryRun, workerId }, "Starting refund processor");
+  log.info({ maxJobs, dryRun, tokenAddress, workerId }, "Starting refund processor for token");
 
   // Initialize nonce from admin wallet's current transaction count
   currentNonce = await provider.getTransactionCount(adminWallet.address);
@@ -199,6 +235,8 @@ async function main() {
 
   let processed = 0;
   let succeeded = 0;
+  let skippedReleased = 0; // Released back to queue (e.g., wrong token)
+  let skippedCompleted = 0; // Marked as done (e.g., already refunded, wrong status)
   let failed = 0;
   let totalUsdcRefunded = 0n;
 
@@ -221,12 +259,20 @@ async function main() {
       processed++;
       const usdcAmount = BigInt(job.payload.usdcAmount6d || 0);
 
-      log.info({ jobId: job.id, purchaseId: job.payload.purchaseId }, `Preview job ${processed}/${jobs.length}`);
-
       try {
-        await processRefund(job as RefundJob, true);
-        succeeded++;
-        totalUsdcRefunded += usdcAmount;
+        const result = await processRefund(job as RefundJob, true, tokenAddress);
+        if (result.skipped) {
+          if (result.action === "release") {
+            skippedReleased++;
+            console.log(`  ⏭️  Skipped (will release): ${result.reason}\n`);
+          } else {
+            skippedCompleted++;
+            console.log(`  ⏭️  Skipped (will mark done): ${result.reason}\n`);
+          }
+        } else {
+          succeeded++;
+          totalUsdcRefunded += usdcAmount;
+        }
       } catch (error: any) {
         failed++;
         log.error({ err: error, jobId: job.id }, "Preview failed");
@@ -248,11 +294,25 @@ async function main() {
       log.info({ jobId: job.id, purchaseId: job.payload.purchaseId }, `Processing job ${processed}/${maxJobs}`);
 
       try {
-        await processRefund(job, false);
-        await finishJob(job.id, true);
-        succeeded++;
-        totalUsdcRefunded += usdcAmount;
-        log.info({ jobId: job.id }, "Job completed successfully");
+        const result = await processRefund(job, false, tokenAddress);
+        if (result.skipped) {
+          if (result.action === "release") {
+            // Release back to queue for processing later (e.g., different token)
+            skippedReleased++;
+            await releaseJob(job.id);
+            log.info({ jobId: job.id, reason: result.reason }, "Job skipped and released back to queue");
+          } else {
+            // Mark as done - no refund needed (e.g., already refunded, wrong status)
+            skippedCompleted++;
+            await finishJob(job.id, true);
+            log.info({ jobId: job.id, reason: result.reason }, "Job skipped and marked as done");
+          }
+        } else {
+          await finishJob(job.id, true);
+          succeeded++;
+          totalUsdcRefunded += usdcAmount;
+          log.info({ jobId: job.id }, "Job completed successfully");
+        }
       } catch (error: any) {
         failed++;
         log.error({ err: error, jobId: job.id }, "Job failed");
@@ -264,17 +324,38 @@ async function main() {
   const totalUsdcDecimal = (parseFloat(totalUsdcRefunded.toString()) / 1e6).toFixed(2);
 
   console.log("\n=== REFUND PROCESSING SUMMARY ===\n");
+  console.log(`Token: ${tokenAddress}`);
   console.log(`Jobs processed: ${processed}`);
   console.log(`Succeeded: ${succeeded}`);
+  console.log(`Skipped - Released: ${skippedReleased}`);
+  console.log(`Skipped - Marked Done: ${skippedCompleted}`);
   console.log(`Failed: ${failed}`);
-  console.log(`Total USDC refunded: $${totalUsdcDecimal}\n`);
+  console.log(`Total USDC ${dryRun ? "to be refunded" : "refunded"}: $${totalUsdcDecimal}\n`);
 
   if (dryRun) {
     console.log("🔍 This was a DRY RUN - no actual refunds were executed");
     console.log("Run without --dry-run true to execute refunds on-chain");
-  } else if (failed > 0) {
-    console.log("⚠️  Some jobs failed and were marked as DEAD (no retry)");
-    console.log("Review failed jobs manually before re-enqueueing");
+    if (skippedReleased > 0) {
+      console.log(`\n⏭️  ${skippedReleased} jobs would be released back to queue`);
+      console.log("   (e.g., different token - will be processed later)");
+    }
+    if (skippedCompleted > 0) {
+      console.log(`\n✅ ${skippedCompleted} jobs would be marked as done`);
+      console.log("   (e.g., already refunded, purchase status is completed/refunded/failed)");
+    }
+  } else {
+    if (skippedReleased > 0) {
+      console.log(`⏭️  ${skippedReleased} jobs were released back to queue`);
+      console.log("   (e.g., different token - can be processed later with correct --token parameter)");
+    }
+    if (skippedCompleted > 0) {
+      console.log(`✅ ${skippedCompleted} jobs were marked as done`);
+      console.log("   (e.g., already refunded, purchase status is completed/refunded/failed - no refund needed)");
+    }
+    if (failed > 0) {
+      console.log("⚠️  Some jobs failed and were marked as DEAD (no retry)");
+      console.log("Review failed jobs manually before re-enqueueing");
+    }
   }
 
   console.log();
