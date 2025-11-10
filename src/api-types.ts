@@ -6,30 +6,30 @@ export enum LaunchStatus {
 }
 
 export interface SaleInfo {
-    currentUSDC: string;
-    targetUSDC: string;
-    percent: string;
-}
-
-export interface PurchaseStats {
+    currentUSDC: number;
+    targetUSDC: number;
     totalPurchases: number;
     queuedPurchases: number;
 }
 
+// /launches endpoint response
 export interface LaunchResponse {
     name: string;
     symbol: string;
     tokenAddress: string;
     creatorAddress: string;
-    createdAt: string;
+    createdAtTimestamp: number; // use unix timestamp in seconds
     status: LaunchStatus;
-    sale: SaleInfo;
-    marketCap: string;
+    saleInfo: SaleInfo;
+    marketCap: number; // use number in USD 
+    links: Record<string, string>;
+    image?: string;
 }
 
+// /tokens/:tokenAddress endpoint response
 export interface TokenDetailResponse extends LaunchResponse {
     contractUriData: ContractUriData | null;
-    stats: PurchaseStats;
+    saleInfo: SaleInfo;
 }
 
 export interface ContractUriData {
@@ -38,9 +38,8 @@ export interface ContractUriData {
     description?: string;
     image?: string;
     website?: string;
-    twitter?: string;
-    telegram?: string;
-    [key: string]: any;
+    docs?: string;
+    links?: Record<string, string>;
 }
 
 export interface PaginationInfo {
