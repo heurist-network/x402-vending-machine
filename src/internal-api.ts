@@ -15,7 +15,6 @@ import {
   PlatformStatsResponse,
   FacilitatorHealthResponse,
   ContractUriData,
-  PurchaseStats,
   SaleInfo,
 } from "./api-types.js";
 
@@ -156,7 +155,7 @@ async function fetchContractUriData(contractUri: string | null): Promise<Contrac
 /**
  * Get purchase statistics for a token
  */
-async function getPurchaseStats(tokenAddress: string): Promise<PurchaseStats> {
+async function getPurchaseStats(tokenAddress: string): Promise<{ totalPurchases: number; queuedPurchases: number }> {
   const [completed, queued] = await Promise.all([
     prisma.purchase.count({
       where: {
@@ -200,33 +199,49 @@ async function formatLaunchForResponse(
 
   const currentUSDC = launch.usdcAccounted6d || BigInt(0);
   const targetUSDC = launch.targetUsdc6d || BigInt(1);
-  const percent = Number((currentUSDC * BigInt(10000) / targetUSDC)) / 100;
 
   const contractUriData = includeMetadata ? await fetchContractUriData(launch.contractUri) : null;
 
-  const sale: SaleInfo = {
-    currentUSDC: (Number(currentUSDC) / 1_000_000).toFixed(2),
-    targetUSDC: (Number(targetUSDC) / 1_000_000).toFixed(2),
-    percent: Math.min(percent, 100).toFixed(2)
+  const purchaseStats = launch.tokenLower
+    ? await getPurchaseStats(launch.tokenLower)
+    : { totalPurchases: 0, queuedPurchases: 0 };
+
+  const saleInfo: SaleInfo = {
+    currentUSDC: Number(currentUSDC) / 1_000_000,
+    targetUSDC: Number(targetUSDC) / 1_000_000,
+    totalPurchases: purchaseStats.totalPurchases,
+    queuedPurchases: purchaseStats.queuedPurchases
   };
+
+  const links: Record<string, string> = {};
+  if (contractUriData?.links) {
+    Object.entries(contractUriData.links).forEach(([key, value]) => {
+      if (value && typeof value === 'string') {
+        links[key] = value;
+      }
+    });
+  }
+  if (contractUriData?.website) links.website = contractUriData.website;
+  if (contractUriData?.docs) links.docs = contractUriData.docs;
 
   const baseResponse: LaunchResponse = {
     name: launch.name,
     symbol: launch.symbol,
     tokenAddress: launch.tokenLower || "",
     creatorAddress: launch.creator,
-    createdAt: launch.createdAt.toISOString(),
+    createdAtTimestamp: Math.floor(launch.createdAt.getTime() / 1000),
     status,
-    sale,
-    marketCap: "0"
+    saleInfo,
+    marketCap: 0,
+    links,
+    image: contractUriData?.image
   };
 
-  if (includeMetadata && includeStats && launch.tokenLower) {
-    const stats = await getPurchaseStats(launch.tokenLower);
+  if (includeMetadata && launch.tokenLower) {
     const detailResponse: TokenDetailResponse = {
       ...baseResponse,
       contractUriData,
-      stats
+      saleInfo
     };
     return detailResponse;
   }
@@ -319,24 +334,30 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
  *                         type: string
  *                       creatorAddress:
  *                         type: string
- *                       imageUrl:
- *                         type: string
- *                       createdAt:
- *                         type: string
- *                         format: date-time
+ *                       createdAtTimestamp:
+ *                         type: integer
+ *                         description: Unix timestamp in seconds
  *                       status:
  *                         type: string
  *                         enum: [open, graduated, refundable]
- *                       sale:
+ *                       saleInfo:
  *                         type: object
  *                         properties:
  *                           currentUSDC:
- *                             type: string
+ *                             type: number
  *                           targetUSDC:
- *                             type: string
- *                           percent:
- *                             type: string
+ *                             type: number
+ *                           totalPurchases:
+ *                             type: integer
+ *                           queuedPurchases:
+ *                             type: integer
  *                       marketCap:
+ *                         type: number
+ *                       links:
+ *                         type: object
+ *                         additionalProperties:
+ *                           type: string
+ *                       image:
  *                         type: string
  *                 pagination:
  *                   type: object
