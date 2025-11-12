@@ -384,6 +384,21 @@ app.get("/v1/launches", async (req, res) => {
     const result = await cacheSWR<LaunchesResponse>(cacheKey, async () => {
       const where: any = {};
 
+      if (status && typeof status === "string") {
+        const statusFilter = status.toLowerCase();
+        const now14 = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+
+        if (statusFilter === "open") {
+          where.graduated = false;
+          where.createdAt = { gte: now14 };
+        } else if (statusFilter === "graduated") {
+          where.graduated = true;
+        } else if (statusFilter === "refundable") {
+          where.graduated = false;
+          where.createdAt = { lt: now14 };
+        }
+      }
+
       if (q && typeof q === "string" && q.trim()) {
         const searchTerm = q.trim().toLowerCase();
         where.OR = [
@@ -403,18 +418,9 @@ app.get("/v1/launches", async (req, res) => {
         prisma.launch.count({ where })
       ]);
 
-      let formattedLaunches = await Promise.all(
+      const formattedLaunches = await Promise.all(
         launches.map(launch => formatLaunchForResponse(launch, false, false))
       );
-
-      if (status && typeof status === "string") {
-        const statusFilter = status.toLowerCase();
-        if (["open", "graduated", "refundable"].includes(statusFilter)) {
-          formattedLaunches = formattedLaunches.filter(
-            launch => launch.status === statusFilter
-          );
-        }
-      }
 
       const response: LaunchesResponse = {
         data: formattedLaunches,
