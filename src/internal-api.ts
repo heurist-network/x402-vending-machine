@@ -284,15 +284,25 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
  * /v1/launches:
  *   get:
  *     summary: Get all token launches
- *     description: Paginated, searchable, and filterable list of all token launches
+ *     description: |
+ *       Paginated, searchable, and filterable list of token launches.
+ *
+ *       **Default behavior:** Returns open + graduated launches (excludes refundable).
+ *
+ *       **Filtering:**
+ *       - `filter=open` - Only open launches (not graduated, < 14 days old)
+ *       - `filter=graduated` - Only graduated launches
+ *       - `filter=refundable` - Only refundable launches (not graduated, > 14 days old)
+ *
+ *       **Note:** Refundable launches are ONLY visible with `filter=refundable`.
  *     tags: [Launches]
  *     parameters:
  *       - in: query
- *         name: status
+ *         name: filter
  *         schema:
  *           type: string
  *           enum: [open, graduated, refundable]
- *         description: Filter by launch status
+ *         description: Filter by launch status (omit to get open + graduated only)
  *       - in: query
  *         name: q
  *         schema:
@@ -373,39 +383,57 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
  */
 app.get("/v1/launches", async (req, res) => {
   try {
-    const { status, q, page = "1", limit = "50" } = req.query;
+    const { filter, q, page = "1", limit = "50" } = req.query;
 
     const pageNum = Math.max(1, parseInt(page as string) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit as string) || 50));
     const skip = (pageNum - 1) * limitNum;
 
-    const cacheKey = `launches:${status || "all"}:${q || ""}:${pageNum}:${limitNum}`;
+    const cacheKey = `launches:${filter || "default"}:${q || ""}:${pageNum}:${limitNum}`;
 
     const result = await cacheSWR<LaunchesResponse>(cacheKey, async () => {
       const where: any = {};
+      const now14 = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
 
-      if (status && typeof status === "string") {
-        const statusFilter = status.toLowerCase();
-        const now14 = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-
-        if (statusFilter === "open") {
+      if (filter && typeof filter === "string") {
+        const filterValue = filter.toLowerCase();
+        if (filterValue === "open") {
           where.graduated = false;
           where.createdAt = { gte: now14 };
-        } else if (statusFilter === "graduated") {
+        } else if (filterValue === "graduated") {
           where.graduated = true;
-        } else if (statusFilter === "refundable") {
+        } else if (filterValue === "refundable") {
           where.graduated = false;
           where.createdAt = { lt: now14 };
         }
+      } else {
+        // Default: exclude refundable launches
+        where.OR = [
+          { graduated: true },
+          {
+            graduated: false,
+            createdAt: { gte: now14 }
+          }
+        ];
       }
 
       if (q && typeof q === "string" && q.trim()) {
         const searchTerm = q.trim().toLowerCase();
-        where.OR = [
+        const searchConditions = [
           { name: { contains: searchTerm, mode: "insensitive" } },
           { symbol: { contains: searchTerm, mode: "insensitive" } },
           { tokenLower: { contains: searchTerm } }
         ];
+
+        if (where.OR) {
+          where.AND = [
+            { OR: where.OR },
+            { OR: searchConditions }
+          ];
+          delete where.OR;
+        } else {
+          where.OR = searchConditions;
+        }
       }
 
       const [launches, totalCount] = await Promise.all([
