@@ -28,18 +28,7 @@ export interface LaunchResponse {
 
 // /tokens/:tokenAddress endpoint response
 export interface TokenDetailResponse extends LaunchResponse {
-    contractUriData: ContractUriData | null;
-    saleInfo: SaleInfo;
-}
-
-export interface ContractUriData {
-    name?: string;
-    symbol?: string;
     description?: string;
-    image?: string;
-    website?: string;
-    docs?: string;
-    links?: Record<string, string>;
 }
 
 export interface PaginationInfo {

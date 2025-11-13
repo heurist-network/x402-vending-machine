@@ -14,7 +14,6 @@ import {
   LaunchesResponse,
   PlatformStatsResponse,
   FacilitatorHealthResponse,
-  ContractUriData,
   SaleInfo,
 } from "./api-types.js";
 
@@ -137,9 +136,9 @@ function getLaunchStatus(launch: any): LaunchStatus {
 }
 
 /**
- * Fetch entire contract URI data (R2 file)
+ * Fetch contract URI data (R2 file) and extract metadata
  */
-async function fetchContractUriData(contractUri: string | null): Promise<ContractUriData | null> {
+async function fetchContractUriData(contractUri: string | null): Promise<any | null> {
   if (!contractUri) {
     return null;
   }
@@ -149,7 +148,7 @@ async function fetchContractUriData(contractUri: string | null): Promise<Contrac
     throw new Error(`Failed to fetch contract URI: ${response.status}`);
   }
 
-  return await response.json() as ContractUriData;
+  return await response.json();
 }
 
 /**
@@ -240,8 +239,7 @@ async function formatLaunchForResponse(
   if (includeMetadata && launch.tokenLower) {
     const detailResponse: TokenDetailResponse = {
       ...baseResponse,
-      contractUriData,
-      saleInfo
+      description: contractUriData?.description
     };
     return detailResponse;
   }
