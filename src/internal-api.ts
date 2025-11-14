@@ -4,13 +4,17 @@ import pino from "pino";
 import { generateJwt } from "@coinbase/cdp-sdk/auth";
 import rateLimit from "express-rate-limit";
 import NodeCache from "node-cache";
+import multer from "multer";
+import sharp from "sharp";
+import { randomUUID } from "crypto";
 import { prisma } from "./db.js";
 import swaggerUi from "swagger-ui-express";
 import swaggerJsdoc from "swagger-jsdoc";
+import { enqueueJob } from "./queue.js";
+import { uploadImage, uploadMetadataJson, launchMetadataKey, tokenImageKey } from "./r2.js";
 import {
   LaunchStatus,
-  LaunchResponse,
-  TokenDetailResponse,
+  TokenResponse,
   LaunchesResponse,
   PlatformStatsResponse,
   FacilitatorHealthResponse,
@@ -54,6 +58,10 @@ const swaggerOptions = {
       {
         name: "Health",
         description: "Health check endpoints"
+      },
+      {
+        name: "Testing",
+        description: "Testing endpoints for frontend development (bypasses x402 payment)"
       }
     ]
   },
@@ -61,6 +69,22 @@ const swaggerOptions = {
 };
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
+
+// Configure multer for in-memory file upload
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB max
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (allowedMimeTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPEG, PNG, GIF, and WebP images are allowed.'));
+    }
+  }
+});
 
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:3000";
 const ALLOW_ALL_CORS = process.env.ALLOW_ALL_CORS === "true";
@@ -181,19 +205,8 @@ async function getPurchaseStats(tokenAddress: string): Promise<{ totalPurchases:
  */
 async function formatLaunchForResponse(
   launch: any,
-  includeStats: true,
-  includeMetadata: true
-): Promise<TokenDetailResponse>;
-async function formatLaunchForResponse(
-  launch: any,
-  includeStats?: boolean,
-  includeMetadata?: boolean
-): Promise<LaunchResponse>;
-async function formatLaunchForResponse(
-  launch: any,
-  includeStats = false,
-  includeMetadata = false
-): Promise<LaunchResponse | TokenDetailResponse> {
+  includeMetadata = true
+): Promise<TokenResponse> {
   const status = getLaunchStatus(launch);
 
   const currentUSDC = launch.usdcAccounted6d || BigInt(0);
@@ -223,7 +236,7 @@ async function formatLaunchForResponse(
   if (contractUriData?.website) links.website = contractUriData.website;
   if (contractUriData?.docs) links.docs = contractUriData.docs;
 
-  const baseResponse: LaunchResponse = {
+  const response: TokenResponse = {
     name: launch.name,
     symbol: launch.symbol,
     tokenAddress: launch.tokenLower || "",
@@ -233,18 +246,11 @@ async function formatLaunchForResponse(
     saleInfo,
     marketCap: 0,
     links,
-    image: contractUriData?.image
+    image: contractUriData?.image ?? null,
+    description: contractUriData?.description ?? null
   };
 
-  if (includeMetadata && launch.tokenLower) {
-    const detailResponse: TokenDetailResponse = {
-      ...baseResponse,
-      description: contractUriData?.description
-    };
-    return detailResponse;
-  }
-
-  return baseResponse;
+  return response;
 }
 
 /**
@@ -367,6 +373,12 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
  *                           type: string
  *                       image:
  *                         type: string
+ *                         nullable: true
+ *                         description: Token image URL (can be null if not set)
+ *                       description:
+ *                         type: string
+ *                         nullable: true
+ *                         description: Token description (can be null if not set)
  *                 pagination:
  *                   type: object
  *                   properties:
@@ -445,7 +457,7 @@ app.get("/v1/launches", async (req, res) => {
       ]);
 
       const formattedLaunches = await Promise.all(
-        launches.map(launch => formatLaunchForResponse(launch, false, false))
+        launches.map(launch => formatLaunchForResponse(launch))
       );
 
       const response: LaunchesResponse = {
@@ -474,7 +486,7 @@ app.get("/v1/launches", async (req, res) => {
  * /v1/token/{address}:
  *   get:
  *     summary: Get token details
- *     description: Detailed information for a single token including metadata and purchase statistics
+ *     description: Detailed information for a single token including metadata and purchase statistics. Returns the same structure as items in /v1/launches.
  *     tags: [Launches]
  *     parameters:
  *       - in: path
@@ -486,6 +498,50 @@ app.get("/v1/launches", async (req, res) => {
  *     responses:
  *       200:
  *         description: Token details with metadata and stats
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 name:
+ *                   type: string
+ *                 symbol:
+ *                   type: string
+ *                 tokenAddress:
+ *                   type: string
+ *                 creatorAddress:
+ *                   type: string
+ *                 createdAtTimestamp:
+ *                   type: integer
+ *                   description: Unix timestamp in seconds
+ *                 status:
+ *                   type: string
+ *                   enum: [open, graduated, refundable]
+ *                 saleInfo:
+ *                   type: object
+ *                   properties:
+ *                     currentUSDC:
+ *                       type: number
+ *                     targetUSDC:
+ *                       type: number
+ *                     totalPurchases:
+ *                       type: integer
+ *                     queuedPurchases:
+ *                       type: integer
+ *                 marketCap:
+ *                   type: number
+ *                 links:
+ *                   type: object
+ *                   additionalProperties:
+ *                     type: string
+ *                 image:
+ *                   type: string
+ *                   nullable: true
+ *                   description: Token image URL (can be null if not set)
+ *                 description:
+ *                   type: string
+ *                   nullable: true
+ *                   description: Token description (can be null if not set)
  *       404:
  *         description: Token not found
  *       500:
@@ -497,7 +553,7 @@ app.get("/v1/token/:address", async (req, res) => {
 
     const cacheKey = `token:${address.toLowerCase()}`;
 
-    const result = await cacheSWR<TokenDetailResponse | null>(cacheKey, async () => {
+    const result = await cacheSWR<TokenResponse | null>(cacheKey, async () => {
       const launch = await prisma.launch.findUnique({
         where: { tokenLower: address.toLowerCase() }
       });
@@ -506,7 +562,7 @@ app.get("/v1/token/:address", async (req, res) => {
         return null;
       }
 
-      return await formatLaunchForResponse(launch, true, true);
+      return await formatLaunchForResponse(launch);
     });
 
     if (!result) {
@@ -627,6 +683,255 @@ app.get("/internal/facilitator_health", async (_req, res) => {
 
   const data = await response.json() as FacilitatorHealthResponse;
   res.json(data);
+});
+
+/**
+ * @swagger
+ * /internal/uploadImage:
+ *   post:
+ *     summary: Upload and process token image
+ *     description: |
+ *       Upload an image for a token launch. The image will be automatically downscaled to 400x400 pixels
+ *       and uploaded to R2 storage. Returns the public URL of the uploaded image.
+ *
+ *       **For testing:** Use this endpoint in Swagger UI to upload an image, then use the returned imageUrl
+ *       in the createCoin endpoint.
+ *     tags: [Testing]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - image
+ *             properties:
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *                 description: Image file (JPEG, PNG, GIF, or WebP, max 10MB)
+ *     responses:
+ *       200:
+ *         description: Image uploaded successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                 imageUrl:
+ *                   type: string
+ *                   description: Public URL of the uploaded image
+ *       400:
+ *         description: Bad request (no file or invalid file type)
+ *       500:
+ *         description: Internal server error
+ */
+app.post("/internal/uploadImage", upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "no_file_uploaded" });
+    }
+
+    const fileExtension = req.file.mimetype.split('/')[1];
+    const fileName = `${randomUUID()}.${fileExtension}`;
+    const key = tokenImageKey(fileName);
+
+    // Process image: downscale to 400x400
+    const processedBuffer = await sharp(req.file.buffer)
+      .resize(400, 400, {
+        fit: 'cover',
+        position: 'center'
+      })
+      .toBuffer();
+
+    const imageUrl = await uploadImage(key, processedBuffer, req.file.mimetype);
+
+    res.json({ ok: true, imageUrl });
+  } catch (err) {
+    log.error({ err }, "POST /internal/uploadImage failed");
+    res.status(500).json({
+      error: "internal_error",
+      message: "Failed to upload image"
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /internal/createCoin:
+ *   post:
+ *     summary: Create a test token launch (bypasses x402 payment)
+ *     description: |
+ *       Create a token launch for testing purposes without requiring x402 payment.
+ *       This endpoint is intended for frontend development and testing only.
+ *
+ *       **Testing flow:**
+ *       1. Use `/internal/uploadImage` to upload a token image and get the imageUrl
+ *       2. Use this endpoint with the imageUrl and other metadata to create the token
+ *       3. The token will be created and deployed on-chain
+ *
+ *       All fields from the regular coin creation endpoint are supported, including social links.
+ *     tags: [Testing]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - symbol
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 maxLength: 32
+ *                 description: Token name
+ *                 example: "Test Token"
+ *               symbol:
+ *                 type: string
+ *                 maxLength: 10
+ *                 description: Token symbol
+ *                 example: "TEST"
+ *               description:
+ *                 type: string
+ *                 description: Token description
+ *                 example: "A test token for development"
+ *               imageUrl:
+ *                 type: string
+ *                 description: Token image URL (from uploadImage endpoint)
+ *                 example: "https://pub-xxxxx.r2.dev/images/xxxxx.png"
+ *               creator:
+ *                 type: string
+ *                 description: Creator wallet address (optional, defaults to 0x0000...)
+ *                 example: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+ *               website:
+ *                 type: string
+ *                 description: Project website URL
+ *                 example: "https://example.com"
+ *               docs:
+ *                 type: string
+ *                 description: Documentation URL
+ *                 example: "https://docs.example.com"
+ *               twitter:
+ *                 type: string
+ *                 description: Twitter/X handle or URL
+ *                 example: "https://twitter.com/example"
+ *               telegram:
+ *                 type: string
+ *                 description: Telegram group URL
+ *                 example: "https://t.me/example"
+ *               discord:
+ *                 type: string
+ *                 description: Discord server URL
+ *                 example: "https://discord.gg/example"
+ *               size:
+ *                 type: string
+ *                 enum: [TEST, S, L]
+ *                 default: TEST
+ *                 description: Launch size (TEST for testing)
+ *     responses:
+ *       200:
+ *         description: Token launch created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ok:
+ *                   type: boolean
+ *                 reference:
+ *                   type: string
+ *                   description: Launch ID (use with /x402/coin_status to check status)
+ *                 metadataUri:
+ *                   type: string
+ *                   description: R2 URL of the token metadata JSON
+ *                 notes:
+ *                   type: string
+ *       400:
+ *         description: Bad request (missing or invalid parameters)
+ *       500:
+ *         description: Internal server error
+ */
+app.post("/internal/createCoin", async (req, res) => {
+  try {
+    const { name, symbol, size = "TEST" } = req.body || {};
+
+    if (!name || !symbol) {
+      return res.status(400).json({ error: "bad_request", message: "name and symbol are required" });
+    }
+
+    if (name.toLowerCase().includes("heurist") || symbol.toLowerCase().includes("heurist")) {
+      return res.status(400).json({ error: "invalid_name_or_symbol", message: "Cannot use 'heurist' in name or symbol" });
+    }
+
+    if (name.length > 32 || symbol.length > 10) {
+      return res.status(400).json({ error: "name_or_symbol_too_long", message: "Name max 32 chars, symbol max 10 chars" });
+    }
+
+    const validSizes = ["TEST", "S", "L"];
+    if (!validSizes.includes(size)) {
+      return res.status(400).json({ error: "invalid_size", message: "Size must be TEST, S, or L" });
+    }
+
+    // Default creator to zero address for testing
+    const creator = req.body?.creator?.toLowerCase() || "0x0000000000000000000000000000000000000000";
+
+    const launchId = randomUUID();
+    const metadataPayload = {
+      name,
+      symbol,
+      description: req.body?.description ?? `${name} fair launch via x402 Vending Machine.`,
+      creator: creator,
+      image: req.body?.imageUrl || null,
+      website: req.body?.website || null,
+      docs: req.body?.docs || null,
+      links: {
+        twitter: req.body?.twitter || null,
+        telegram: req.body?.telegram || null,
+        discord: req.body?.discord || null
+      }
+    };
+
+    const metadataKey = launchMetadataKey(launchId);
+    const metadataUri = await uploadMetadataJson(metadataKey, metadataPayload);
+
+    const launch = await prisma.launch.create({
+      data: {
+        id: launchId,
+        name,
+        symbol,
+        size,
+        creator,
+        x402Nonce: `test-${randomUUID()}`, // Generate a test nonce
+        contractUri: metadataUri,
+        status: "queued"
+      }
+    });
+
+    await enqueueJob("COIN", `test-coin:${launchId}`, {
+      launchId: launch.id,
+      name,
+      symbol,
+      size,
+      creator,
+      metadataUri
+    }, undefined, 1);
+
+    res.json({
+      ok: true,
+      reference: launch.id,
+      metadataUri,
+      notes: "The token will be created shortly. You can call /x402/coin_status to check the status."
+    });
+  } catch (err) {
+    log.error({ err }, "POST /internal/createCoin failed");
+    res.status(500).json({
+      error: "internal_error",
+      message: "Failed to create test token"
+    });
+  }
 });
 
 const INTERNAL_PORT = process.env.INTERNAL_PORT || 8081;

@@ -13,7 +13,7 @@ export interface SaleInfo {
 }
 
 // /launches endpoint response
-export interface LaunchResponse {
+export interface TokenResponse {
     name: string;
     symbol: string;
     tokenAddress: string;
@@ -23,13 +23,13 @@ export interface LaunchResponse {
     saleInfo: SaleInfo;
     marketCap: number; // use number in USD 
     links: Record<string, string>;
-    image?: string;
+    image: string | null;
+    description: string | null;
 }
 
 // /tokens/:tokenAddress endpoint response
-export interface TokenDetailResponse extends LaunchResponse {
-    description?: string;
-}
+export type LaunchResponse = TokenResponse;
+export type TokenDetailResponse = TokenResponse;
 
 export interface PaginationInfo {
     currentPage: number;
@@ -38,7 +38,7 @@ export interface PaginationInfo {
 }
 
 export interface LaunchesResponse {
-    data: LaunchResponse[];
+    data: TokenResponse[];
     pagination: PaginationInfo;
 }
 

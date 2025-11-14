@@ -41,3 +41,17 @@ export async function getMetadataJson(key: string): Promise<any> {
 export function launchMetadataKey(launchId: string) {
   return `tokens/${launchId}.json`;
 }
+
+export async function uploadImage(key: string, buffer: Buffer, contentType: string): Promise<string> {
+  await s3.send(new PutObjectCommand({
+    Bucket: process.env.R2_BUCKET!,
+    Key: key,
+    Body: buffer,
+    ContentType: contentType
+  }));
+  return `${process.env.R2_PUBLIC_BASE}/${key}`;
+}
+
+export function tokenImageKey(fileName: string) {
+  return `images/${fileName}`;
+}
