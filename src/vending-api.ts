@@ -154,8 +154,60 @@ app.post("/x402/buy5x", async (req, res) => {
   await handleBuy(req, res, 5_000_000n);
 });
 
+app.post("/x402/buy6x", async (req, res) => {
+  await handleBuy(req, res, 6_000_000n);
+});
+
+app.post("/x402/buy7x", async (req, res) => {
+  await handleBuy(req, res, 7_000_000n);
+});
+
+app.post("/x402/buy8x", async (req, res) => {
+  await handleBuy(req, res, 8_000_000n);
+});
+
+app.post("/x402/buy9x", async (req, res) => {
+  await handleBuy(req, res, 9_000_000n);
+});
+
 app.post("/x402/buy10x", async (req, res) => {
   await handleBuy(req, res, 10_000_000n);
+});
+
+app.post("/x402/buy11x", async (req, res) => {
+  await handleBuy(req, res, 11_000_000n);
+});
+
+app.post("/x402/buy12x", async (req, res) => {
+  await handleBuy(req, res, 12_000_000n);
+});
+
+app.post("/x402/buy13x", async (req, res) => {
+  await handleBuy(req, res, 13_000_000n);
+});
+
+app.post("/x402/buy14x", async (req, res) => {
+  await handleBuy(req, res, 14_000_000n);
+});
+
+app.post("/x402/buy15x", async (req, res) => {
+  await handleBuy(req, res, 15_000_000n);
+});
+
+app.post("/x402/buy16x", async (req, res) => {
+  await handleBuy(req, res, 16_000_000n);
+});
+
+app.post("/x402/buy17x", async (req, res) => {
+  await handleBuy(req, res, 17_000_000n);
+});
+
+app.post("/x402/buy18x", async (req, res) => {
+  await handleBuy(req, res, 18_000_000n);
+});
+
+app.post("/x402/buy19x", async (req, res) => {
+  await handleBuy(req, res, 19_000_000n);
 });
 
 app.post("/x402/buy20x", async (req, res) => {
