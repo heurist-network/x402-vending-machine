@@ -8,14 +8,15 @@
  *   tokenPriceInUSD = tokenPriceInHEU × heuPriceUSD (from CoinGecko)
  *
  * Usage:
- *   bun run token-price-engine.ts                  # HEU price only
- *   bun run token-price-engine.ts <tokenAddress>   # Token price
+ *   bun run token-price.ts                     # All graduated tokens from BFF
+ *   bun run token-price.ts <tokenAddress>      # Single token price
  *
  * Requires: RPC_URL_BASE environment variable (archive node for historical blocks)
  */
 
 import { ethers } from "ethers";
 
+const BFF_URL = process.env.BFF_URL || "http://34.10.4.155:8081";
 const COINGECKO_API = "https://api.coingecko.com/api/v3";
 const HEU_ADDRESS = "0xEF22cb48B8483dF6152e1423b19dF5553BbD818b";
 const V2_FACTORY = "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6";
@@ -39,16 +40,14 @@ interface HEUPrices {
   oneDayAgo: number;
 }
 
-interface TokenPrice {
-  tokenAddress: string;
-  priceInHEU: number;
-  priceInUSD: number;
-}
-
 interface TokenPriceResult {
-  current: TokenPrice;
-  oneHourAgo: TokenPrice;
-  oneDayAgo: TokenPrice;
+  tokenAddress: string;
+  current_price_usd: string;
+  "1_hour_ago_price_usd": string;
+  "1_day_ago_price_usd": string;
+  current_price_heu: string;
+  "1_hour_ago_price_heu": string;
+  "1_day_ago_price_heu": string;
 }
 
 /**
@@ -62,7 +61,6 @@ function sortTokens(a: string, b: string): [string, string] {
 
 /**
  * Computes Uniswap V2 pair address deterministically using CREATE2.
- * Eliminates need for on-chain getPair() call.
  */
 function computePairAddress(tokenA: string, tokenB: string): string {
   const [token0, token1] = sortTokens(tokenA, tokenB);
@@ -72,7 +70,6 @@ function computePairAddress(tokenA: string, tokenB: string): string {
 
 /**
  * Fetches HEU prices from CoinGecko API.
- * Returns current price and calculates historical prices using percentage changes.
  */
 async function getHEUPrices(): Promise<HEUPrices> {
   const res = await fetch(
@@ -93,8 +90,16 @@ async function getHEUPrices(): Promise<HEUPrices> {
 }
 
 /**
+ * Fetches graduated token addresses from BFF API.
+ */
+async function fetchGraduatedTokens(): Promise<string[]> {
+  const res = await fetch(`${BFF_URL}/v1/launches?filter=graduated`);
+  const data = await res.json();
+  return data.data.map((launch: { tokenAddress: string }) => launch.tokenAddress);
+}
+
+/**
  * Determines if token is token0 in the Uniswap V2 pair.
- * In Uniswap V2, token0 is always the address with smaller hex value.
  */
 function isTokenZero(tokenAddress: string): boolean {
   return tokenAddress.toLowerCase() < HEU_ADDRESS.toLowerCase();
@@ -115,48 +120,41 @@ function parseReserves(
 }
 
 /**
- * Fetches pool reserves at 3 different blocks using Multicall3.
- * Queries current, 1 hour ago, and 24 hours ago blocks in parallel.
+ * Batched multicall for multiple tokens at a specific block.
+ * Returns reserves for all tokens in a single RPC call.
  */
-async function getReservesMulticall(
-  provider: ethers.JsonRpcProvider,
-  pairAddress: string,
-  tokenAddress: string,
-  blocks: { current: number; oneHourAgo: number; oneDayAgo: number }
-): Promise<{
-  current: { tokenReserve: bigint; heuReserve: bigint };
-  oneHourAgo: { tokenReserve: bigint; heuReserve: bigint };
-  oneDayAgo: { tokenReserve: bigint; heuReserve: bigint };
-}> {
-  const pairInterface = new ethers.Interface(PAIR_ABI);
-  const multicall = new ethers.Contract(MULTICALL3, MULTICALL3_ABI, provider);
+async function getBatchedReserves(
+  multicall: ethers.Contract,
+  pairInterface: ethers.Interface,
+  tokens: string[],
+  blockTag: number
+): Promise<Map<string, { tokenReserve: bigint; heuReserve: bigint }>> {
   const getReservesData = pairInterface.encodeFunctionData("getReserves");
 
-  const calls = [
-    { target: pairAddress, allowFailure: false, callData: getReservesData },
-  ];
+  const calls = tokens.map((token) => ({
+    target: computePairAddress(token, HEU_ADDRESS),
+    allowFailure: true,
+    callData: getReservesData,
+  }));
 
-  const [currentRes, hourAgoRes, dayAgoRes] = await Promise.all([
-    multicall.aggregate3(calls, { blockTag: blocks.current }),
-    multicall.aggregate3(calls, { blockTag: blocks.oneHourAgo }),
-    multicall.aggregate3(calls, { blockTag: blocks.oneDayAgo }),
-  ]);
+  const results = await multicall.aggregate3(calls, { blockTag });
 
-  const decodeReserves = (result: { success: boolean; returnData: string }) => {
-    const decoded = pairInterface.decodeFunctionResult("getReserves", result.returnData);
-    return [decoded[0], decoded[1], decoded[2]] as [bigint, bigint, number];
-  };
+  const reservesMap = new Map<string, { tokenReserve: bigint; heuReserve: bigint }>();
 
-  return {
-    current: parseReserves(decodeReserves(currentRes[0]), tokenAddress),
-    oneHourAgo: parseReserves(decodeReserves(hourAgoRes[0]), tokenAddress),
-    oneDayAgo: parseReserves(decodeReserves(dayAgoRes[0]), tokenAddress),
-  };
+  for (let i = 0; i < tokens.length; i++) {
+    const result = results[i];
+    if (result.success) {
+      const decoded = pairInterface.decodeFunctionResult("getReserves", result.returnData);
+      const reserves = [decoded[0], decoded[1], decoded[2]] as [bigint, bigint, number];
+      reservesMap.set(tokens[i].toLowerCase(), parseReserves(reserves, tokens[i]));
+    }
+  }
+
+  return reservesMap;
 }
 
 /**
  * Calculates token price from pool reserves.
- * Formula: tokenPriceInHEU = heuReserve / tokenReserve
  */
 function calculateTokenPrice(
   tokenReserve: bigint,
@@ -174,84 +172,87 @@ function calculateTokenPrice(
 }
 
 /**
- * Main function to get token prices at current, 1h ago, and 24h ago.
- * Combines on-chain pool reserves with CoinGecko HEU price.
+ * Get prices for multiple tokens using true batched multicall.
+ * Only 3 RPC calls total regardless of token count.
  */
-async function getTokenPrices(tokenAddress: string): Promise<TokenPriceResult> {
+async function getBatchedTokenPrices(tokens: string[]): Promise<TokenPriceResult[]> {
   const provider = new ethers.JsonRpcProvider(process.env.RPC_URL_BASE);
+  const pairInterface = new ethers.Interface(PAIR_ABI);
+  const multicall = new ethers.Contract(MULTICALL3, MULTICALL3_ABI, provider);
 
-  const pairAddress = computePairAddress(tokenAddress, HEU_ADDRESS);
   const currentBlock = await provider.getBlockNumber();
-
   const blocks = {
     current: currentBlock,
     oneHourAgo: currentBlock - BLOCKS_PER_HOUR,
     oneDayAgo: currentBlock - BLOCKS_PER_DAY,
   };
 
-  const [heuPrices, reserves] = await Promise.all([
+  const [heuPrices, currentReserves, hourAgoReserves, dayAgoReserves] = await Promise.all([
     getHEUPrices(),
-    getReservesMulticall(provider, pairAddress, tokenAddress, blocks),
+    getBatchedReserves(multicall, pairInterface, tokens, blocks.current),
+    getBatchedReserves(multicall, pairInterface, tokens, blocks.oneHourAgo),
+    getBatchedReserves(multicall, pairInterface, tokens, blocks.oneDayAgo),
   ]);
 
-  return {
-    current: {
-      tokenAddress,
-      ...calculateTokenPrice(reserves.current.tokenReserve, reserves.current.heuReserve, heuPrices.current),
-    },
-    oneHourAgo: {
-      tokenAddress,
-      ...calculateTokenPrice(reserves.oneHourAgo.tokenReserve, reserves.oneHourAgo.heuReserve, heuPrices.oneHourAgo),
-    },
-    oneDayAgo: {
-      tokenAddress,
-      ...calculateTokenPrice(reserves.oneDayAgo.tokenReserve, reserves.oneDayAgo.heuReserve, heuPrices.oneDayAgo),
-    },
-  };
+  return tokens.map((token) => {
+    const tokenLower = token.toLowerCase();
+    const current = currentReserves.get(tokenLower);
+    const hourAgo = hourAgoReserves.get(tokenLower);
+    const dayAgo = dayAgoReserves.get(tokenLower);
+
+    const currentPrice = current
+      ? calculateTokenPrice(current.tokenReserve, current.heuReserve, heuPrices.current)
+      : { priceInHEU: 0, priceInUSD: 0 };
+
+    const hourAgoPrice = hourAgo
+      ? calculateTokenPrice(hourAgo.tokenReserve, hourAgo.heuReserve, heuPrices.oneHourAgo)
+      : { priceInHEU: 0, priceInUSD: 0 };
+
+    const dayAgoPrice = dayAgo
+      ? calculateTokenPrice(dayAgo.tokenReserve, dayAgo.heuReserve, heuPrices.oneDayAgo)
+      : { priceInHEU: 0, priceInUSD: 0 };
+
+    return {
+      tokenAddress: token,
+      current_price_usd: currentPrice.priceInUSD.toFixed(18),
+      "1_hour_ago_price_usd": hourAgoPrice.priceInUSD.toFixed(18),
+      "1_day_ago_price_usd": dayAgoPrice.priceInUSD.toFixed(18),
+      current_price_heu: currentPrice.priceInHEU.toFixed(18),
+      "1_hour_ago_price_heu": hourAgoPrice.priceInHEU.toFixed(18),
+      "1_day_ago_price_heu": dayAgoPrice.priceInHEU.toFixed(18),
+    };
+  });
 }
 
 async function main() {
   const startTime = Date.now();
   const tokenAddress = process.argv[2];
 
-  if (!tokenAddress) {
-    const heuPrices = await getHEUPrices();
-    const duration = Date.now() - startTime;
-    console.log(
-      JSON.stringify(
-        {
-          token: "HEU",
-          current_price_usd: heuPrices.current,
-          "1_hour_ago_price_usd": heuPrices.oneHourAgo,
-          "1_day_ago_price_usd": heuPrices.oneDayAgo,
-          _meta: { duration_ms: duration },
-        },
-        null,
-        2
-      )
-    );
-    return;
-  }
-
   if (!process.env.RPC_URL_BASE) {
-    console.error("RPC_URL_BASE environment variable required for token prices");
+    console.error("RPC_URL_BASE environment variable required");
     process.exit(1);
   }
 
-  const result = await getTokenPrices(tokenAddress);
+  let tokens: string[];
+
+  if (tokenAddress) {
+    tokens = [tokenAddress];
+  } else {
+    tokens = await fetchGraduatedTokens();
+    console.error(`Fetched ${tokens.length} graduated tokens from BFF`);
+  }
+
+  const results = await getBatchedTokenPrices(tokens);
   const duration = Date.now() - startTime;
 
   console.log(
     JSON.stringify(
       {
-        tokenAddress,
-        current_price_usd: result.current.priceInUSD.toFixed(18),
-        "1_hour_ago_price_usd": result.oneHourAgo.priceInUSD.toFixed(18),
-        "1_day_ago_price_usd": result.oneDayAgo.priceInUSD.toFixed(18),
-        current_price_heu: result.current.priceInHEU.toFixed(18),
-        "1_hour_ago_price_heu": result.oneHourAgo.priceInHEU.toFixed(18),
-        "1_day_ago_price_heu": result.oneDayAgo.priceInHEU.toFixed(18),
-        _meta: { duration_ms: duration },
+        prices: results,
+        _meta: {
+          token_count: tokens.length,
+          duration_ms: duration,
+        },
       },
       null,
       2
@@ -261,4 +262,4 @@ async function main() {
 
 main().catch(console.error);
 
-export { getTokenPrices, getHEUPrices, type TokenPriceResult, type HEUPrices };
+export { getBatchedTokenPrices, getHEUPrices, fetchGraduatedTokens };
