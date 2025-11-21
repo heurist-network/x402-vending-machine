@@ -40,14 +40,11 @@ interface HEUPrices {
   oneDayAgo: number;
 }
 
-interface TokenPriceResult {
+interface TokenMcapResult {
   tokenAddress: string;
-  current_price_usd: string;
-  "1_hour_ago_price_usd": string;
-  "1_day_ago_price_usd": string;
-  current_price_heu: string;
-  "1_hour_ago_price_heu": string;
-  "1_day_ago_price_heu": string;
+  current_mcap_usd: string;
+  "1_hour_ago_mcap_usd": string;
+  "1_day_ago_mcap_usd": string;
 }
 
 /**
@@ -153,29 +150,32 @@ async function getBatchedReserves(
   return reservesMap;
 }
 
+const TOTAL_SUPPLY = 1_000_000_000;
+
 /**
- * Calculates token price from pool reserves.
+ * Calculates token mcap from pool reserves.
+ * mcap = price × 1 billion (total supply)
  */
-function calculateTokenPrice(
+function calculateMcap(
   tokenReserve: bigint,
   heuReserve: bigint,
   heuUsdPrice: number
-): { priceInHEU: number; priceInUSD: number } {
+): number {
   if (tokenReserve === 0n) {
-    return { priceInHEU: 0, priceInUSD: 0 };
+    return 0;
   }
 
   const priceInHEU = Number(heuReserve) / Number(tokenReserve);
   const priceInUSD = priceInHEU * heuUsdPrice;
 
-  return { priceInHEU, priceInUSD };
+  return priceInUSD * TOTAL_SUPPLY;
 }
 
 /**
- * Get prices for multiple tokens using true batched multicall.
+ * Get mcap for multiple tokens using true batched multicall.
  * Only 3 RPC calls total regardless of token count.
  */
-async function getBatchedTokenPrices(tokens: string[]): Promise<TokenPriceResult[]> {
+async function getBatchedTokenMcaps(tokens: string[]): Promise<TokenMcapResult[]> {
   const provider = new ethers.JsonRpcProvider(process.env.RPC_URL_BASE);
   const pairInterface = new ethers.Interface(PAIR_ABI);
   const multicall = new ethers.Contract(MULTICALL3, MULTICALL3_ABI, provider);
@@ -200,26 +200,23 @@ async function getBatchedTokenPrices(tokens: string[]): Promise<TokenPriceResult
     const hourAgo = hourAgoReserves.get(tokenLower);
     const dayAgo = dayAgoReserves.get(tokenLower);
 
-    const currentPrice = current
-      ? calculateTokenPrice(current.tokenReserve, current.heuReserve, heuPrices.current)
-      : { priceInHEU: 0, priceInUSD: 0 };
+    const currentMcap = current
+      ? calculateMcap(current.tokenReserve, current.heuReserve, heuPrices.current)
+      : 0;
 
-    const hourAgoPrice = hourAgo
-      ? calculateTokenPrice(hourAgo.tokenReserve, hourAgo.heuReserve, heuPrices.oneHourAgo)
-      : { priceInHEU: 0, priceInUSD: 0 };
+    const hourAgoMcap = hourAgo
+      ? calculateMcap(hourAgo.tokenReserve, hourAgo.heuReserve, heuPrices.oneHourAgo)
+      : 0;
 
-    const dayAgoPrice = dayAgo
-      ? calculateTokenPrice(dayAgo.tokenReserve, dayAgo.heuReserve, heuPrices.oneDayAgo)
-      : { priceInHEU: 0, priceInUSD: 0 };
+    const dayAgoMcap = dayAgo
+      ? calculateMcap(dayAgo.tokenReserve, dayAgo.heuReserve, heuPrices.oneDayAgo)
+      : 0;
 
     return {
       tokenAddress: token,
-      current_price_usd: currentPrice.priceInUSD.toFixed(18),
-      "1_hour_ago_price_usd": hourAgoPrice.priceInUSD.toFixed(18),
-      "1_day_ago_price_usd": dayAgoPrice.priceInUSD.toFixed(18),
-      current_price_heu: currentPrice.priceInHEU.toFixed(18),
-      "1_hour_ago_price_heu": hourAgoPrice.priceInHEU.toFixed(18),
-      "1_day_ago_price_heu": dayAgoPrice.priceInHEU.toFixed(18),
+      current_mcap_usd: currentMcap.toFixed(2),
+      "1_hour_ago_mcap_usd": hourAgoMcap.toFixed(2),
+      "1_day_ago_mcap_usd": dayAgoMcap.toFixed(2),
     };
   });
 }
@@ -242,13 +239,13 @@ async function main() {
     console.error(`Fetched ${tokens.length} graduated tokens from BFF`);
   }
 
-  const results = await getBatchedTokenPrices(tokens);
+  const results = await getBatchedTokenMcaps(tokens);
   const duration = Date.now() - startTime;
 
   console.log(
     JSON.stringify(
       {
-        prices: results,
+        mcaps: results,
         _meta: {
           token_count: tokens.length,
           duration_ms: duration,
@@ -262,4 +259,4 @@ async function main() {
 
 main().catch(console.error);
 
-export { getBatchedTokenPrices, getHEUPrices, fetchGraduatedTokens };
+export { getBatchedTokenMcaps, getHEUPrices, fetchGraduatedTokens };
